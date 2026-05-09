@@ -38,27 +38,27 @@ public final class RtpToRtmpFrameAssembler {
             return Collections.emptyList();
         }
         InboundMediaFrame frame = packet.frame();
-        if (frame.trackType() == TrackType.AUDIO
-                && (frame.codecType() == CodecType.AAC || frame.codecType() == CodecType.MPEG4_GENERIC)) {
-            return assembleAac(packet);
+        if (frame.trackType() == TrackType.AUDIO) {
+            if(frame.codecType() == CodecType.AAC || frame.codecType() == CodecType.MPEG4_GENERIC){
+                return assembleAac(packet);
+            }
         }
-        if (frame.trackType() != TrackType.VIDEO) {
-            return Collections.emptyList();
+        if (frame.trackType() == TrackType.VIDEO) {
+            RtpParseResult parseResult = rtpPacketParser.parse(frame.payload());
+            RtpPacketHeader header = parseResult == null ? null : parseResult.rtpHeader();
+            if (header == null || header.payloadLength() <= 0) {
+                return Collections.emptyList();
+            }
+            String trackId = frame.trackId() == null ? "" : frame.trackId().trim();
+            RtpToRtmpTrackState state = state(trackId);
+            if (frame.codecType() == CodecType.H264) {
+                return assembleH264(packet, header, state, track);
+            }
+            if (frame.codecType() == CodecType.H265) {
+                return assembleH265(packet, header, state, track);
+            }
         }
-        if (frame.codecType() != CodecType.H264 && frame.codecType() != CodecType.H265) {
-            return Collections.emptyList();
-        }
-        RtpParseResult parseResult = rtpPacketParser.parse(frame.payload());
-        RtpPacketHeader header = parseResult == null ? null : parseResult.rtpHeader();
-        if (header == null || header.payloadLength() <= 0) {
-            return Collections.emptyList();
-        }
-        String trackId = frame.trackId() == null ? "" : frame.trackId().trim();
-        RtpToRtmpTrackState state = state(trackId);
-        if (frame.codecType() == CodecType.H264) {
-            return assembleH264(packet, header, state, track);
-        }
-        return assembleH265(packet, header, state, track);
+        return Collections.emptyList();
     }
 
     private List<InboundMediaFrame> assembleH264(InboundRtpPacket packet, RtpPacketHeader header, RtpToRtmpTrackState state, ITrack track) {
