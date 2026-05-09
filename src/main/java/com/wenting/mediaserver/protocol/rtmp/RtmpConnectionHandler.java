@@ -103,8 +103,7 @@ public final class RtmpConnectionHandler extends SimpleChannelInboundHandler<Rtm
         log.warn(
                 "RTMP connection error: session={} remote={}",
                 session == null ? "unknown" : session.sessionId(),
-                ctx.channel().remoteAddress(),
-                cause
+                ctx.channel().remoteAddress()
         );
         ctx.close();
     }
