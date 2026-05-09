@@ -86,4 +86,64 @@ class RtspSubscriberSessionTest {
         assertEquals(3, packetRef.get().frame().payloadLength());
         controlChannel.finishAndReleaseAll();
     }
+
+    @Test
+    void shouldFallbackToControlChannelAddressWhenTrackConnectionAddressIsUnspecified() {
+        EmbeddedChannel controlChannel = new EmbeddedChannel() {
+            @Override
+            public java.net.SocketAddress remoteAddress() {
+                return new InetSocketAddress("127.0.0.1", 8554);
+            }
+        };
+
+        AtomicReference<InetSocketAddress> remoteAddress = new AtomicReference<InetSocketAddress>();
+
+        RtspSubscriberSession subscriber = new RtspSubscriberSession(
+                "subscriber-1",
+                new StreamKey(StreamProtocol.RTSP, "live", "cam01"),
+                controlChannel,
+                (packet, port, address) -> {
+                    remoteAddress.set(address);
+                    return true;
+                }
+        );
+        subscriber.transport("trackID=0", new RtspTransport(
+                RtspTransportMode.RTP_UDP,
+                5000,
+                5001,
+                20000,
+                20001,
+                null,
+                null,
+                "RTP/AVP;unicast;client_port=5000-5001;server_port=20000-20001"
+        ));
+        subscriber.track(new VideoTrack("trackID=0", CodecType.H264, "0.0.0.0"));
+
+        subscriber.writeMediaPacket(new InboundRtpPacket(
+                new InboundMediaFrame(
+                        StreamProtocol.RTSP,
+                        TrackType.VIDEO,
+                        CodecType.H264,
+                        "",
+                        new StreamKey(StreamProtocol.RTSP, "live", "cam01"),
+                        "trackID=0",
+                        null,
+                        null,
+                        false,
+                        false,
+                        null,
+                        new byte[]{0x11, 0x22, 0x33}
+                ),
+                9000,
+                false,
+                null,
+                20000,
+                2
+        ));
+
+        assertNotNull(remoteAddress.get());
+        assertEquals("127.0.0.1", remoteAddress.get().getAddress().getHostAddress());
+        assertEquals(5000, remoteAddress.get().getPort());
+        controlChannel.finishAndReleaseAll();
+    }
 }

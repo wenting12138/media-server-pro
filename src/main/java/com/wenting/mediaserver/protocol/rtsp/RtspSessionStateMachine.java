@@ -226,21 +226,25 @@ public final class RtspSessionStateMachine {
     private void prepareSubscriber(ChannelHandlerContext ctx, RtspRequestMessage request) {
         session.role(RtspSessionRole.SUBSCRIBER);
         session.streamKey(RtspHelper.parseStreamKey(request.uri()));
-        IPublishedStream publishedStream = registry.findPublishedStream(session.streamKey());
+        IPublishedStream publishedStream = findPublishedStreamForSession();
         if (publishedStream == null) {
             writeResponse(ctx, request, RtspResponseStatuses.NOT_FOUND);
             return;
         }
         RtspSession publisherSession = findPublisherSession();
-        if (publisherSession == null || publisherSession.sdpOrigin() == null || publisherSession.sdpOrigin().isEmpty()) {
+        String sdp = publisherSession == null ? null : publisherSession.sdpOrigin();
+        if (sdp == null || sdp.isEmpty()) {
+            sdp = publishedStream.sdpDescription(session.streamKey());
+        }
+        if (sdp == null || sdp.isEmpty()) {
             writeResponse(ctx, request, RtspResponseStatuses.NOT_FOUND);
             return;
         }
-        session.sdpOrigin(publisherSession.sdpOrigin());
+        session.sdpOrigin(sdp);
         FullHttpResponse response = new DefaultFullHttpResponse(
                 RtspVersions.RTSP_1_0,
                 RtspResponseStatuses.OK,
-                Unpooled.copiedBuffer(publisherSession.sdpOrigin(), CharsetUtil.UTF_8)
+                Unpooled.copiedBuffer(sdp, CharsetUtil.UTF_8)
         );
         populateCommonHeaders(response, request);
         response.headers().set(HttpHeaderNames.CONTENT_TYPE, "application/sdp");
@@ -382,7 +386,7 @@ public final class RtspSessionStateMachine {
         if (!session.isSubscriber() || !session.hasStreamKey()) {
             return false;
         }
-        IPublishedStream stream = registry.findPublishedStream(session.streamKey());
+        IPublishedStream stream = findPublishedStreamForSession();
         if (stream == null) {
             return false;
         }
@@ -406,10 +410,21 @@ public final class RtspSessionStateMachine {
         if (!session.isSubscriber() || !session.hasStreamKey()) {
             return;
         }
-        IPublishedStream stream = registry.findPublishedStream(session.streamKey());
+        IPublishedStream stream = findPublishedStreamForSession();
         if (stream != null) {
             stream.removeSubscriber(session.sessionId());
         }
+    }
+
+    private IPublishedStream findPublishedStreamForSession() {
+        if (!session.hasStreamKey()) {
+            return null;
+        }
+        IPublishedStream stream = registry.findPublishedStream(session.streamKey());
+        if (stream != null) {
+            return stream;
+        }
+        return registry.findPublishedStreamByPath(session.streamKey().app(), session.streamKey().stream());
     }
 
     private void routeInterleavedPacket(InterleavedRtpPacket packet, RtspTransport transport) {

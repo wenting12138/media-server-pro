@@ -1,6 +1,7 @@
 package com.wenting.mediaserver.core.publish;
 
 import com.wenting.mediaserver.core.enums.StreamProtocol;
+import com.wenting.mediaserver.core.model.StreamKey;
 import com.wenting.mediaserver.core.publish.report.AvSyncSnapshot;
 import com.wenting.mediaserver.core.publish.report.RtcpTrackStats;
 
@@ -18,4 +19,8 @@ public interface IPublishedStream {
     public void addSubscriber(MediaSubscriberAdapter subscriber);
 
     public void removeSubscriber(String sessionId);
+
+    default String sdpDescription(StreamKey requestStreamKey) {
+        return null;
+    }
 }

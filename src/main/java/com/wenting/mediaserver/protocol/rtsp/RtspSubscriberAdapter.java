@@ -1,6 +1,7 @@
 package com.wenting.mediaserver.protocol.rtsp;
 
 import com.wenting.mediaserver.core.publish.InboundRtpPacket;
+import com.wenting.mediaserver.core.publish.InboundMediaFrame;
 import com.wenting.mediaserver.core.publish.MediaSubscriberAdapter;
 
 /**
@@ -30,6 +31,11 @@ public final class RtspSubscriberAdapter implements MediaSubscriberAdapter {
     @Override
     public void writeMediaPacket(InboundRtpPacket packet) {
         subscriberSession.writeMediaPacket(packet);
+    }
+
+    @Override
+    public void writeInboundFrame(InboundMediaFrame frame) {
+        subscriberSession.writeInboundFrame(frame);
     }
 
     public RtspSubscriberSession subscriberSession() {

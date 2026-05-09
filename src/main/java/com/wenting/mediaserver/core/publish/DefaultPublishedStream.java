@@ -21,6 +21,7 @@ import com.wenting.mediaserver.core.publish.frame.H265TrackFramePayloadHandler;
 import com.wenting.mediaserver.core.publish.frame.PassThroughTrackFramePayloadHandler;
 import com.wenting.mediaserver.core.publish.frame.TrackFramePayloadHandler;
 import com.wenting.mediaserver.core.publish.gop.GopCache;
+import com.wenting.mediaserver.core.remux.rtp.RtspSdpDescriptionBuilder;
 import com.wenting.mediaserver.core.publish.payload.AacTrackPayloadHandler;
 import com.wenting.mediaserver.core.publish.payload.DefaultTrackPayloadContext;
 import com.wenting.mediaserver.core.publish.payload.G711TrackPayloadHandler;
@@ -55,6 +56,7 @@ public final class DefaultPublishedStream implements IPublishedStream {
 
     private final StreamKey key;
     private final RtpPacketParser rtpPacketParser = new RtpPacketParser();
+    private final RtspSdpDescriptionBuilder rtspSdpDescriptionBuilder = new RtspSdpDescriptionBuilder();
     private final Map<String, PublishedTrackContext> trackContextsByTrackId = new ConcurrentHashMap<String, PublishedTrackContext>();
     private final Map<String, MediaSubscriberAdapter> subscribersBySessionId = new ConcurrentHashMap<String, MediaSubscriberAdapter>();
     private final Map<String, SubscriberPlaybackState> playbackStatesBySessionId = new ConcurrentHashMap<String, SubscriberPlaybackState>();
@@ -344,6 +346,11 @@ public final class DefaultPublishedStream implements IPublishedStream {
                 videoNtpMillis.longValue(),
                 audioNtpMillis.longValue()
         );
+    }
+
+    @Override
+    public String sdpDescription(StreamKey requestStreamKey) {
+        return rtspSdpDescriptionBuilder.build(requestStreamKey == null ? key : requestStreamKey, trackContextsByTrackId.values());
     }
 
     private boolean shouldStartSubscriberNow(InboundRtpPacket packet) {

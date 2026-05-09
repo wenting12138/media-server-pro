@@ -53,6 +53,21 @@ public final class StreamRegistry {
         return key == null ? null : published.get(key);
     }
 
+    public IPublishedStream findPublishedStreamByPath(String app, String stream) {
+        if (app == null || app.trim().isEmpty() || stream == null || stream.trim().isEmpty()) {
+            return null;
+        }
+        for (Map.Entry<StreamKey, IPublishedStream> entry : published.entrySet()) {
+            if (entry == null || entry.getKey() == null) {
+                continue;
+            }
+            if (app.equals(entry.getKey().app()) && stream.equals(entry.getKey().stream())) {
+                return entry.getValue();
+            }
+        }
+        return null;
+    }
+
     public Map<StreamKey, IPublishedStream> publishedStreamsSnapshot() {
         return Collections.unmodifiableMap(new LinkedHashMap<StreamKey, IPublishedStream>(published));
     }
