@@ -1,4 +1,4 @@
-package com.wenting.mediaserver.protocol.http;
+package com.wenting.mediaserver.protocol.http.flv;
 
 final class FlvTagBuilder {
 

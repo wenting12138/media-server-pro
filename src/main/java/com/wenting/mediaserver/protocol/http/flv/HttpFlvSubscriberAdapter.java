@@ -1,4 +1,4 @@
-package com.wenting.mediaserver.protocol.http;
+package com.wenting.mediaserver.protocol.http.flv;
 
 import com.wenting.mediaserver.core.publish.InboundMediaFrame;
 import com.wenting.mediaserver.core.publish.InboundRtpPacket;
