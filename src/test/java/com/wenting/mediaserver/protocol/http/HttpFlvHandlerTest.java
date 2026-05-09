@@ -14,14 +14,17 @@ import com.wenting.mediaserver.protocol.rtsp.RtspSession;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.handler.codec.http.DefaultFullHttpRequest;
+import io.netty.handler.codec.http.DefaultLastHttpContent;
 import io.netty.handler.codec.http.DefaultHttpContent;
 import io.netty.handler.codec.http.DefaultHttpResponse;
 import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpVersion;
+import io.netty.handler.codec.http.HttpResponseStatus;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 
 class HttpFlvHandlerTest {
 
@@ -85,6 +88,47 @@ class HttpFlvHandlerTest {
         flvHeader.release();
         configTag.release();
         keyFrameTag.release();
+        channel.finishAndReleaseAll();
+    }
+
+    @Test
+    void shouldReturn404WhenHttpFlvStreamDoesNotExist() {
+        StreamRegistry registry = new StreamRegistry();
+        EmbeddedChannel channel = new EmbeddedChannel(new HttpFlvHandler(registry));
+
+        channel.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/live/missing.flv"));
+
+        io.netty.handler.codec.http.FullHttpResponse response = channel.readOutbound();
+        assertNotNull(response);
+        assertEquals(HttpResponseStatus.NOT_FOUND, response.status());
+        assertEquals("text/plain; charset=UTF-8", response.headers().get("Content-Type"));
+        response.release();
+        channel.finishAndReleaseAll();
+    }
+
+    @Test
+    void shouldPassThroughNonFlvPath() {
+        StreamRegistry registry = new StreamRegistry();
+        EmbeddedChannel channel = new EmbeddedChannel(new HttpFlvHandler(registry));
+        DefaultFullHttpRequest request = new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/live/cam08");
+
+        channel.writeInbound(request);
+        DefaultFullHttpRequest forwarded = channel.readInbound();
+        assertSame(request, forwarded);
+        forwarded.release();
+        channel.finishAndReleaseAll();
+    }
+
+    @Test
+    void shouldPassThroughNonGetRequest() {
+        StreamRegistry registry = new StreamRegistry();
+        EmbeddedChannel channel = new EmbeddedChannel(new HttpFlvHandler(registry));
+        DefaultFullHttpRequest request = new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.POST, "/live/cam08.flv");
+
+        channel.writeInbound(request);
+        DefaultFullHttpRequest forwarded = channel.readInbound();
+        assertSame(request, forwarded);
+        forwarded.release();
         channel.finishAndReleaseAll();
     }
 
@@ -420,6 +464,131 @@ class HttpFlvHandlerTest {
         channel.finishAndReleaseAll();
     }
 
+    @Test
+    void shouldReplayStartupCacheWhenHttpFlvSubscriberReconnectsToRtmpPublishedStream() {
+        StreamRegistry registry = new StreamRegistry();
+        StreamKey streamKey = new StreamKey(StreamProtocol.RTMP, "live", "cam06");
+        DefaultPublishedStream stream = new DefaultPublishedStream(streamKey);
+        registry.registerPublishedStream(streamKey, stream);
+        stream.onInboundFrame(rtmpFrame(
+                streamKey,
+                "video-h264",
+                TrackType.VIDEO,
+                CodecType.H264,
+                0L,
+                true,
+                true,
+                new byte[] {
+                        0x01, 0x64, 0x00, 0x1F, (byte) 0xFF, (byte) 0xE1,
+                        0x00, 0x08, 0x67, 0x64, 0x00, 0x1F, (byte) 0xAC, (byte) 0xD9, 0x40, 0x78,
+                        0x01, 0x00, 0x04, 0x68, (byte) 0xEE, 0x3C, (byte) 0x80
+                }
+        ));
+        stream.onInboundFrame(rtmpFrame(
+                streamKey,
+                "video-h264",
+                TrackType.VIDEO,
+                CodecType.H264,
+                100L,
+                true,
+                false,
+                new byte[] {
+                        0x00, 0x00, 0x00, 0x03,
+                        0x65, 0x11, 0x22
+                }
+        ));
+
+        EmbeddedChannel first = new EmbeddedChannel(new HttpFlvHandler(registry));
+        first.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/live/cam06.flv"));
+        drainFlvResponse(first);
+        first.finishAndReleaseAll();
+
+        EmbeddedChannel second = new EmbeddedChannel(new HttpFlvHandler(registry));
+        second.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/live/cam06.flv"));
+
+        DefaultHttpResponse response = second.readOutbound();
+        DefaultHttpContent flvHeader = second.readOutbound();
+        DefaultHttpContent videoConfigTag = second.readOutbound();
+        DefaultHttpContent videoKeyTag = second.readOutbound();
+
+        assertNotNull(response);
+        assertFlvHeader(flvHeader.content());
+        assertVideoTag(videoConfigTag.content(), 7, 1, 0, 0L);
+        assertVideoTag(videoKeyTag.content(), 7, 1, 1, 100L);
+
+        flvHeader.release();
+        videoConfigTag.release();
+        videoKeyTag.release();
+        second.finishAndReleaseAll();
+    }
+
+    @Test
+    void shouldReplayStartupCacheWhenHttpFlvSubscriberReconnectsToRtspPublishedStream() {
+        StreamRegistry registry = new StreamRegistry();
+        StreamKey streamKey = new StreamKey(StreamProtocol.RTSP, "live", "cam07");
+        DefaultPublishedStream stream = new DefaultPublishedStream(streamKey);
+        registry.registerPublishedStream(streamKey, stream);
+        stream.onInboundRtpPacket(rtpPacket(
+                StreamProtocol.RTSP,
+                streamKey,
+                "video-h264",
+                CodecType.H264,
+                TrackType.VIDEO,
+                90000,
+                1,
+                1000L,
+                false,
+                new byte[] {0x67, 0x64, 0x00, 0x1F, (byte) 0xAC, (byte) 0xD9, 0x40, 0x78}
+        ));
+        stream.onInboundRtpPacket(rtpPacket(
+                StreamProtocol.RTSP,
+                streamKey,
+                "video-h264",
+                CodecType.H264,
+                TrackType.VIDEO,
+                90000,
+                2,
+                1000L,
+                false,
+                new byte[] {0x68, (byte) 0xEE, 0x3C, (byte) 0x80}
+        ));
+        stream.onInboundRtpPacket(rtpPacket(
+                StreamProtocol.RTSP,
+                streamKey,
+                "video-h264",
+                CodecType.H264,
+                TrackType.VIDEO,
+                90000,
+                3,
+                1000L,
+                true,
+                new byte[] {0x65, 0x11, 0x22}
+        ));
+
+        EmbeddedChannel first = new EmbeddedChannel(new HttpFlvHandler(registry));
+        first.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/live/cam07.flv"));
+        drainFlvResponse(first);
+        first.finishAndReleaseAll();
+
+        EmbeddedChannel second = new EmbeddedChannel(new HttpFlvHandler(registry));
+        second.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/live/cam07.flv"));
+
+        DefaultHttpResponse response = second.readOutbound();
+        DefaultHttpContent flvHeader = second.readOutbound();
+        DefaultHttpContent videoConfigTag = second.readOutbound();
+        DefaultHttpContent videoKeyTag = second.readOutbound();
+
+        assertNotNull(response);
+        assertFlvHeader(flvHeader.content());
+        assertVideoTag(videoConfigTag.content(), 7, 1, 0, 0L);
+        assertVideoTag(videoKeyTag.content(), 7, 1, 1, 0L);
+
+        flvHeader.release();
+        videoConfigTag.release();
+        videoKeyTag.release();
+        second.finishAndReleaseAll();
+    }
+
     private static void assertFlvHeader(ByteBuf buf) {
         assertEquals('F', buf.getUnsignedByte(0));
         assertEquals('L', buf.getUnsignedByte(1));
@@ -450,6 +619,15 @@ class HttpFlvHandlerTest {
                 | ((long) buf.getUnsignedByte(4) << 16)
                 | ((long) buf.getUnsignedByte(5) << 8)
                 | buf.getUnsignedByte(6);
+    }
+
+    private static void drainFlvResponse(EmbeddedChannel channel) {
+        Object outbound;
+        while ((outbound = channel.readOutbound()) != null) {
+            if (outbound instanceof DefaultHttpContent) {
+                ((DefaultHttpContent) outbound).release();
+            }
+        }
     }
 
     private static InboundMediaFrame rtmpFrame(
