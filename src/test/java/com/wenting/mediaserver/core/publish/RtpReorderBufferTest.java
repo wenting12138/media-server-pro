@@ -45,6 +45,23 @@ class RtpReorderBufferTest {
         assertEquals(9, result.gapSkippedPackets());
     }
 
+    @Test
+    void shouldHoldOutOfOrderPacketsUntilMissingSequenceArrives() {
+        RtpReorderBuffer buffer = new RtpReorderBuffer(8, 16);
+
+        RtpReorderResult first = buffer.offer(packet(100), header(100));
+        assertEquals(1, first.orderedPackets().size());
+
+        RtpReorderResult outOfOrder = buffer.offer(packet(102), header(102));
+        assertTrue(outOfOrder.orderedPackets().isEmpty());
+
+        RtpReorderResult recovered = buffer.offer(packet(101), header(101));
+        assertEquals(2, recovered.orderedPackets().size());
+        assertEquals(101, recovered.orderedPackets().get(0).frame().payload()[0] & 0xFF);
+        assertEquals(102, recovered.orderedPackets().get(1).frame().payload()[0] & 0xFF);
+        assertEquals(1, recovered.reorderedReleasedPackets());
+    }
+
     private static InboundRtpPacket packet(int sequenceNumber) {
         return new InboundRtpPacket(
                 new InboundMediaFrame(

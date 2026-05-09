@@ -18,6 +18,7 @@ import com.wenting.mediaserver.protocol.rtsp.RtspSessionManager;
 import io.netty.channel.embedded.EmbeddedChannel;
 import org.junit.jupiter.api.Test;
 
+import java.net.InetSocketAddress;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -274,7 +275,7 @@ class RtmpConnectionHandlerTest {
                 "video-h264",
                 CodecType.H264,
                 TrackType.VIDEO,
-                1,
+                9,
                 1000L,
                 false,
                 new byte[]{0x67, 0x64, 0x00, 0x1F, (byte) 0xAC, (byte) 0xD9, 0x40, 0x78}
@@ -284,7 +285,7 @@ class RtmpConnectionHandlerTest {
                 "video-h264",
                 CodecType.H264,
                 TrackType.VIDEO,
-                2,
+                10,
                 1000L,
                 false,
                 new byte[]{0x68, (byte) 0xEE, 0x3C, (byte) 0x80}
@@ -536,6 +537,270 @@ class RtmpConnectionHandlerTest {
     }
 
     @Test
+    void shouldRemuxRtspG711uRtpPacketsToRtmpAudioMessagesAfterPlayStarts() {
+        StreamRegistry registry = new StreamRegistry(new RtspSessionManager());
+        StreamKey streamKey = new StreamKey(StreamProtocol.RTSP, "live", "cam08");
+        DefaultPublishedStream stream = new DefaultPublishedStream(streamKey);
+        registry.registerPublishedStream(streamKey, stream);
+        stream.onInboundRtpPacket(rtpPacket(
+                streamKey,
+                "video-h264",
+                CodecType.H264,
+                TrackType.VIDEO,
+                1,
+                1000L,
+                false,
+                new byte[]{0x67, 0x64, 0x00, 0x1F, (byte) 0xAC, (byte) 0xD9, 0x40, 0x78}
+        ));
+        stream.onInboundRtpPacket(rtpPacket(
+                streamKey,
+                "video-h264",
+                CodecType.H264,
+                TrackType.VIDEO,
+                2,
+                1000L,
+                false,
+                new byte[]{0x68, (byte) 0xEE, 0x3C, (byte) 0x80}
+        ));
+        stream.onInboundRtpPacket(rtpPacket(
+                streamKey,
+                "video-h264",
+                CodecType.H264,
+                TrackType.VIDEO,
+                3,
+                1000L,
+                true,
+                new byte[]{0x65, 0x11, 0x22}
+        ));
+
+        RtmpSessionManager sessionManager = new RtmpSessionManager();
+        EmbeddedChannel channel = new EmbeddedChannel(new RtmpConnectionHandler(registry, sessionManager));
+
+        Map<String, Object> connectObject = new LinkedHashMap<String, Object>();
+        connectObject.put("app", "live");
+        channel.writeInbound(new RtmpCommandMessage(3, 0L, 0, "connect", 1.0d, connectObject, Collections.<Object>emptyList()));
+        drainOutbound(channel, 4);
+        channel.writeInbound(new RtmpCommandMessage(3, 0L, 0, "createStream", 2.0d, null, Collections.<Object>emptyList()));
+        drainOutbound(channel, 1);
+        channel.writeInbound(new RtmpCommandMessage(8, 0L, 1, "play", 0.0d, null, Collections.<Object>singletonList("cam08")));
+        drainOutbound(channel, 3);
+
+        stream.onInboundRtpPacket(g711RtpPacket(
+                streamKey,
+                "audio-g711u",
+                CodecType.G711U,
+                10,
+                160L,
+                new byte[]{0x41, 0x52, 0x63}
+        ));
+
+        RtmpAudioMessage audio = channel.readOutbound();
+        assertNotNull(audio);
+        assertEquals(8, audio.soundFormat());
+        assertEquals(4, audio.payload().length);
+        assertEquals(0x82, audio.payload()[0] & 0xFF);
+        assertEquals(0x41, audio.payload()[1] & 0xFF);
+        assertEquals(0x63, audio.payload()[3] & 0xFF);
+        channel.finishAndReleaseAll();
+    }
+
+    @Test
+    void shouldKeepRtmpTimestampsContinuousForRtspH264AndG711aDuringPlay() {
+        StreamRegistry registry = new StreamRegistry(new RtspSessionManager());
+        StreamKey streamKey = new StreamKey(StreamProtocol.RTSP, "live", "cam09");
+        DefaultPublishedStream stream = new DefaultPublishedStream(streamKey);
+        registry.registerPublishedStream(streamKey, stream);
+        stream.onInboundRtpPacket(rtpPacket(
+                streamKey,
+                "video-h264",
+                CodecType.H264,
+                TrackType.VIDEO,
+                1,
+                1000L,
+                false,
+                new byte[]{0x67, 0x64, 0x00, 0x1F, (byte) 0xAC, (byte) 0xD9, 0x40, 0x78}
+        ));
+        stream.onInboundRtpPacket(rtpPacket(
+                streamKey,
+                "video-h264",
+                CodecType.H264,
+                TrackType.VIDEO,
+                2,
+                1000L,
+                false,
+                new byte[]{0x68, (byte) 0xEE, 0x3C, (byte) 0x80}
+        ));
+        stream.onInboundRtpPacket(rtpPacket(
+                streamKey,
+                "video-h264",
+                CodecType.H264,
+                TrackType.VIDEO,
+                3,
+                1000L,
+                true,
+                new byte[]{0x65, 0x11, 0x22}
+        ));
+
+        RtmpSessionManager sessionManager = new RtmpSessionManager();
+        EmbeddedChannel channel = new EmbeddedChannel(new RtmpConnectionHandler(registry, sessionManager));
+
+        Map<String, Object> connectObject = new LinkedHashMap<String, Object>();
+        connectObject.put("app", "live");
+        channel.writeInbound(new RtmpCommandMessage(3, 0L, 0, "connect", 1.0d, connectObject, Collections.<Object>emptyList()));
+        drainOutbound(channel, 4);
+        channel.writeInbound(new RtmpCommandMessage(3, 0L, 0, "createStream", 2.0d, null, Collections.<Object>emptyList()));
+        drainOutbound(channel, 1);
+        channel.writeInbound(new RtmpCommandMessage(8, 0L, 1, "play", 0.0d, null, Collections.<Object>singletonList("cam09")));
+        drainOutbound(channel, 3);
+
+        stream.onInboundRtpPacket(rtpPacket(
+                streamKey,
+                "video-h264",
+                CodecType.H264,
+                TrackType.VIDEO,
+                4,
+                4600L,
+                true,
+                new byte[]{0x41, 0x33, 0x44}
+        ));
+        RtmpVideoMessage video = channel.readOutbound();
+        assertNotNull(video);
+        assertEquals(40L, video.timestamp());
+        assertEquals(1, video.avcPacketType().intValue());
+        assertEquals(2, video.frameType());
+
+        stream.onInboundRtpPacket(g711RtpPacket(
+                streamKey,
+                "audio-g711a",
+                CodecType.G711A,
+                10,
+                160L,
+                new byte[]{0x55, 0x66}
+        ));
+        RtmpAudioMessage audio0 = channel.readOutbound();
+        assertNotNull(audio0);
+        assertEquals(0L, audio0.timestamp());
+        assertEquals(7, audio0.soundFormat());
+
+        stream.onInboundRtpPacket(g711RtpPacket(
+                streamKey,
+                "audio-g711a",
+                CodecType.G711A,
+                11,
+                320L,
+                new byte[]{0x77, (byte) 0x88}
+        ));
+        RtmpAudioMessage audio20 = channel.readOutbound();
+        assertNotNull(audio20);
+        assertEquals(20L, audio20.timestamp());
+        assertEquals(7, audio20.soundFormat());
+        channel.finishAndReleaseAll();
+    }
+
+    @Test
+    void shouldKeepRtmpTimestampsContinuousForRtspH265AndG711uDuringPlay() {
+        StreamRegistry registry = new StreamRegistry(new RtspSessionManager());
+        StreamKey streamKey = new StreamKey(StreamProtocol.RTSP, "live", "cam10");
+        DefaultPublishedStream stream = new DefaultPublishedStream(streamKey);
+        registry.registerPublishedStream(streamKey, stream);
+        stream.onInboundRtpPacket(rtpPacket(
+                streamKey,
+                "video-h265",
+                CodecType.H265,
+                TrackType.VIDEO,
+                1,
+                2000L,
+                false,
+                new byte[]{0x40, 0x01, 0x0C}
+        ));
+        stream.onInboundRtpPacket(rtpPacket(
+                streamKey,
+                "video-h265",
+                CodecType.H265,
+                TrackType.VIDEO,
+                2,
+                2000L,
+                false,
+                new byte[]{0x42, 0x01, 0x01}
+        ));
+        stream.onInboundRtpPacket(rtpPacket(
+                streamKey,
+                "video-h265",
+                CodecType.H265,
+                TrackType.VIDEO,
+                3,
+                2000L,
+                false,
+                new byte[]{0x44, 0x01, (byte) 0xC0}
+        ));
+        stream.onInboundRtpPacket(rtpPacket(
+                streamKey,
+                "video-h265",
+                CodecType.H265,
+                TrackType.VIDEO,
+                4,
+                2000L,
+                true,
+                new byte[]{0x26, 0x01, 0x11, 0x22}
+        ));
+
+        RtmpSessionManager sessionManager = new RtmpSessionManager();
+        EmbeddedChannel channel = new EmbeddedChannel(new RtmpConnectionHandler(registry, sessionManager));
+
+        Map<String, Object> connectObject = new LinkedHashMap<String, Object>();
+        connectObject.put("app", "live");
+        channel.writeInbound(new RtmpCommandMessage(3, 0L, 0, "connect", 1.0d, connectObject, Collections.<Object>emptyList()));
+        drainOutbound(channel, 4);
+        channel.writeInbound(new RtmpCommandMessage(3, 0L, 0, "createStream", 2.0d, null, Collections.<Object>emptyList()));
+        drainOutbound(channel, 1);
+        channel.writeInbound(new RtmpCommandMessage(8, 0L, 1, "play", 0.0d, null, Collections.<Object>singletonList("cam10")));
+        drainOutbound(channel, 3);
+
+        stream.onInboundRtpPacket(rtpPacket(
+                streamKey,
+                "video-h265",
+                CodecType.H265,
+                TrackType.VIDEO,
+                5,
+                5600L,
+                true,
+                new byte[]{0x02, 0x01, 0x55, 0x66}
+        ));
+        RtmpVideoMessage video = channel.readOutbound();
+        assertNotNull(video);
+        assertEquals(40L, video.timestamp());
+        assertEquals(1, video.avcPacketType().intValue());
+        assertEquals(2, video.frameType());
+
+        stream.onInboundRtpPacket(g711RtpPacket(
+                streamKey,
+                "audio-g711u",
+                CodecType.G711U,
+                10,
+                160L,
+                new byte[]{0x41, 0x52}
+        ));
+        RtmpAudioMessage audio0 = channel.readOutbound();
+        assertNotNull(audio0);
+        assertEquals(0L, audio0.timestamp());
+        assertEquals(8, audio0.soundFormat());
+
+        stream.onInboundRtpPacket(g711RtpPacket(
+                streamKey,
+                "audio-g711u",
+                CodecType.G711U,
+                11,
+                320L,
+                new byte[]{0x63, 0x74}
+        ));
+        RtmpAudioMessage audio20 = channel.readOutbound();
+        assertNotNull(audio20);
+        assertEquals(20L, audio20.timestamp());
+        assertEquals(8, audio20.soundFormat());
+        channel.finishAndReleaseAll();
+    }
+
+    @Test
     void shouldRemuxRtspH264WithSdpOnlyParameterSetsToRtmpVideoMessagesOnPlay() {
         RtspSessionManager rtspSessionManager = new RtspSessionManager();
         StreamRegistry registry = new StreamRegistry(rtspSessionManager);
@@ -591,6 +856,126 @@ class RtmpConnectionHandlerTest {
         channel.finishAndReleaseAll();
     }
 
+    @Test
+    void shouldNotEmitRtmpVideoWhenRtspH264FuAIsIncomplete() {
+        StreamRegistry registry = new StreamRegistry(new RtspSessionManager());
+        StreamKey streamKey = new StreamKey(StreamProtocol.RTSP, "live", "cam12");
+        DefaultPublishedStream stream = new DefaultPublishedStream(streamKey);
+        registry.registerPublishedStream(streamKey, stream);
+        stream.onInboundRtpPacket(rtpPacket(
+                streamKey,
+                "video-h264",
+                CodecType.H264,
+                TrackType.VIDEO,
+                1,
+                1000L,
+                false,
+                new byte[]{0x67, 0x64, 0x00, 0x1F, (byte) 0xAC, (byte) 0xD9, 0x40, 0x78}
+        ));
+        stream.onInboundRtpPacket(rtpPacket(
+                streamKey,
+                "video-h264",
+                CodecType.H264,
+                TrackType.VIDEO,
+                2,
+                1000L,
+                false,
+                new byte[]{0x68, (byte) 0xEE, 0x3C, (byte) 0x80}
+        ));
+
+        RtmpSessionManager sessionManager = new RtmpSessionManager();
+        EmbeddedChannel channel = new EmbeddedChannel(new RtmpConnectionHandler(registry, sessionManager));
+        Map<String, Object> connectObject = new LinkedHashMap<String, Object>();
+        connectObject.put("app", "live");
+        channel.writeInbound(new RtmpCommandMessage(3, 0L, 0, "connect", 1.0d, connectObject, Collections.<Object>emptyList()));
+        drainOutbound(channel, 4);
+        channel.writeInbound(new RtmpCommandMessage(3, 0L, 0, "createStream", 2.0d, null, Collections.<Object>emptyList()));
+        drainOutbound(channel, 1);
+        channel.writeInbound(new RtmpCommandMessage(8, 0L, 1, "play", 0.0d, null, Collections.<Object>singletonList("cam12")));
+        drainOutbound(channel, 1);
+
+        stream.onInboundRtpPacket(rtpPacket(
+                streamKey,
+                "video-h264",
+                CodecType.H264,
+                TrackType.VIDEO,
+                10,
+                4600L,
+                false,
+                new byte[]{0x7C, (byte) 0x85, 0x11, 0x22}
+        ));
+
+        assertNull(channel.readOutbound());
+        channel.finishAndReleaseAll();
+    }
+
+    @Test
+    void shouldReplayCachedRtspVideoOnRtmpSubscriberReconnect() {
+        StreamRegistry registry = new StreamRegistry(new RtspSessionManager());
+        StreamKey streamKey = new StreamKey(StreamProtocol.RTSP, "live", "cam13");
+        DefaultPublishedStream stream = new DefaultPublishedStream(streamKey);
+        registry.registerPublishedStream(streamKey, stream);
+        stream.onInboundRtpPacket(rtpPacket(
+                streamKey,
+                "video-h264",
+                CodecType.H264,
+                TrackType.VIDEO,
+                1,
+                1000L,
+                false,
+                new byte[]{0x67, 0x64, 0x00, 0x1F, (byte) 0xAC, (byte) 0xD9, 0x40, 0x78}
+        ));
+        stream.onInboundRtpPacket(rtpPacket(
+                streamKey,
+                "video-h264",
+                CodecType.H264,
+                TrackType.VIDEO,
+                2,
+                1000L,
+                false,
+                new byte[]{0x68, (byte) 0xEE, 0x3C, (byte) 0x80}
+        ));
+        stream.onInboundRtpPacket(rtpPacket(
+                streamKey,
+                "video-h264",
+                CodecType.H264,
+                TrackType.VIDEO,
+                3,
+                1000L,
+                true,
+                new byte[]{0x65, 0x11, 0x22}
+        ));
+
+        RtmpSessionManager sessionManager = new RtmpSessionManager();
+        EmbeddedChannel first = new EmbeddedChannel(new RtmpConnectionHandler(registry, sessionManager));
+        Map<String, Object> connectObject = new LinkedHashMap<String, Object>();
+        connectObject.put("app", "live");
+        first.writeInbound(new RtmpCommandMessage(3, 0L, 0, "connect", 1.0d, connectObject, Collections.<Object>emptyList()));
+        drainOutbound(first, 4);
+        first.writeInbound(new RtmpCommandMessage(3, 0L, 0, "createStream", 2.0d, null, Collections.<Object>emptyList()));
+        drainOutbound(first, 1);
+        first.writeInbound(new RtmpCommandMessage(8, 0L, 1, "play", 0.0d, null, Collections.<Object>singletonList("cam13")));
+        drainOutbound(first, 3);
+        first.close();
+
+        EmbeddedChannel second = new EmbeddedChannel(new RtmpConnectionHandler(registry, sessionManager));
+        second.writeInbound(new RtmpCommandMessage(3, 0L, 0, "connect", 1.0d, connectObject, Collections.<Object>emptyList()));
+        drainOutbound(second, 4);
+        second.writeInbound(new RtmpCommandMessage(3, 0L, 0, "createStream", 2.0d, null, Collections.<Object>emptyList()));
+        drainOutbound(second, 1);
+        second.writeInbound(new RtmpCommandMessage(8, 0L, 1, "play", 0.0d, null, Collections.<Object>singletonList("cam13")));
+
+        RtmpCommandMessage playStatus = second.readOutbound();
+        RtmpVideoMessage config = second.readOutbound();
+        RtmpVideoMessage keyFrame = second.readOutbound();
+        assertNotNull(playStatus);
+        assertNotNull(config);
+        assertEquals(0, config.avcPacketType().intValue());
+        assertNotNull(keyFrame);
+        assertEquals(1, keyFrame.avcPacketType().intValue());
+        second.finishAndReleaseAll();
+    }
+
     private static void drainOutbound(EmbeddedChannel channel, int count) {
         for (int i = 0; i < count; i++) {
             Object ignored = channel.readOutbound();
@@ -607,6 +992,23 @@ class RtmpConnectionHandlerTest {
             long timestamp,
             boolean marker,
             byte[] rtpPayload
+    ) {
+        return rtpPacket(streamKey, trackId, codecType, trackType, sequenceNumber, timestamp, marker, rtpPayload,
+                MediaPacketTransport.TCP_INTERLEAVED, null, null);
+    }
+
+    private static InboundRtpPacket rtpPacket(
+            StreamKey streamKey,
+            String trackId,
+            CodecType codecType,
+            TrackType trackType,
+            int sequenceNumber,
+            long timestamp,
+            boolean marker,
+            byte[] rtpPayload,
+            MediaPacketTransport transport,
+            Integer localPort,
+            java.net.SocketAddress remoteAddress
     ) {
         byte[] packet = new byte[12 + rtpPayload.length];
         packet[0] = (byte) 0x80;
@@ -634,13 +1036,14 @@ class RtmpConnectionHandlerTest {
                         null,
                         false,
                         false,
-                        null,
+                        false,
+                        (InetSocketAddress) remoteAddress,
                         packet
                 ),
-                90000,
+                resolveClockRate(trackType, codecType),
                 false,
-                MediaPacketTransport.TCP_INTERLEAVED,
-                null,
+                transport,
+                localPort,
                 Integer.valueOf(0)
         );
     }
@@ -671,5 +1074,17 @@ class RtmpConnectionHandlerTest {
             byte[] audioFrame
     ) {
         return rtpPacket(streamKey, trackId, codecType, TrackType.AUDIO, sequenceNumber, timestamp, true, audioFrame);
+    }
+
+    private static int resolveClockRate(TrackType trackType, CodecType codecType) {
+        if (trackType == TrackType.AUDIO) {
+            if (codecType == CodecType.AAC || codecType == CodecType.MPEG4_GENERIC) {
+                return 48000;
+            }
+            if (codecType == CodecType.G711A || codecType == CodecType.G711U) {
+                return 8000;
+            }
+        }
+        return 90000;
     }
 }

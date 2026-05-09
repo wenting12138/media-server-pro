@@ -627,6 +627,96 @@ class RtspConnectionHandlerTest {
     }
 
     @Test
+    void shouldReplayCachedRtmpFramesOnRtspSubscriberReconnect() {
+        StreamRegistry registry = new StreamRegistry();
+        StreamKey streamKey = new StreamKey(StreamProtocol.RTMP, "live", "reconnect01");
+        DefaultPublishedStream stream = new DefaultPublishedStream(streamKey);
+        registry.registerPublishedStream(streamKey, stream);
+        stream.onInboundFrame(new InboundMediaFrame(
+                StreamProtocol.RTMP,
+                TrackType.VIDEO,
+                CodecType.H264,
+                "rtmp-publisher",
+                streamKey,
+                "video-h264",
+                Long.valueOf(0L),
+                Long.valueOf(0L),
+                true,
+                true,
+                null,
+                new byte[]{
+                        0x01, 0x64, 0x00, 0x1F, (byte) 0xFF, (byte) 0xE1,
+                        0x00, 0x08, 0x67, 0x64, 0x00, 0x1F, (byte) 0xAC, (byte) 0xD9, 0x40, 0x78,
+                        0x01, 0x00, 0x04, 0x68, (byte) 0xEE, 0x3C, (byte) 0x80
+                }
+        ));
+        stream.onInboundFrame(new InboundMediaFrame(
+                StreamProtocol.RTMP,
+                TrackType.VIDEO,
+                CodecType.H264,
+                "rtmp-publisher",
+                streamKey,
+                "video-h264",
+                Long.valueOf(100L),
+                Long.valueOf(100L),
+                true,
+                false,
+                null,
+                new byte[]{
+                        0x00, 0x00, 0x00, 0x03,
+                        0x65, 0x11, 0x22
+                }
+        ));
+
+        EmbeddedChannel first = new EmbeddedChannel(new RtspConnectionHandler(registry));
+        first.writeInbound(request("DESCRIBE", "rtsp://example/live/reconnect01", ""));
+        FullHttpResponse firstDescribe = first.readOutbound();
+        assertResponse(firstDescribe, RtspResponseStatuses.OK, "1", false).release();
+        first.writeInbound(request(
+                "SETUP",
+                "rtsp://example/live/reconnect01/video-h264",
+                "",
+                "Transport", "RTP/AVP/TCP;unicast;interleaved=0-1"
+        ));
+        assertResponse(first.readOutbound(), RtspResponseStatuses.OK, "1", true).release();
+        first.writeInbound(request("PLAY", "rtsp://example/live/reconnect01", ""));
+        ByteBuf firstSps = (ByteBuf) first.readOutbound();
+        ByteBuf firstPps = (ByteBuf) first.readOutbound();
+        ByteBuf firstIdr = (ByteBuf) first.readOutbound();
+        Object firstResponse = first.readOutbound();
+        firstSps.release();
+        firstPps.release();
+        firstIdr.release();
+        assertResponse(firstResponse, RtspResponseStatuses.OK, "1", true).release();
+        first.close();
+
+        EmbeddedChannel second = new EmbeddedChannel(new RtspConnectionHandler(registry));
+        second.writeInbound(request("DESCRIBE", "rtsp://example/live/reconnect01", ""));
+        FullHttpResponse secondDescribe = second.readOutbound();
+        assertResponse(secondDescribe, RtspResponseStatuses.OK, "1", false).release();
+        second.writeInbound(request(
+                "SETUP",
+                "rtsp://example/live/reconnect01/video-h264",
+                "",
+                "Transport", "RTP/AVP/TCP;unicast;interleaved=4-5"
+        ));
+        assertResponse(second.readOutbound(), RtspResponseStatuses.OK, "1", true).release();
+        second.writeInbound(request("PLAY", "rtsp://example/live/reconnect01", ""));
+        ByteBuf secondSps = (ByteBuf) second.readOutbound();
+        ByteBuf secondPps = (ByteBuf) second.readOutbound();
+        ByteBuf secondIdr = (ByteBuf) second.readOutbound();
+        Object secondResponse = second.readOutbound();
+        assertEquals(4, secondSps.getUnsignedByte(1));
+        assertEquals(4, secondPps.getUnsignedByte(1));
+        assertEquals(4, secondIdr.getUnsignedByte(1));
+        secondSps.release();
+        secondPps.release();
+        secondIdr.release();
+        assertResponse(secondResponse, RtspResponseStatuses.OK, "1", true).release();
+        assertFalse(second.finishAndReleaseAll());
+    }
+
+    @Test
     void shouldFanoutInterleavedPacketToSubscriberAfterPlay() {
         StreamRegistry registry = new StreamRegistry();
         EmbeddedChannel publisherChannel = new EmbeddedChannel(new RtspConnectionHandler(registry));
