@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WebRTC Test</title>
+  <style>
+    :root { color-scheme: light; }
+    body { margin: 0; font-family: Consolas, "Courier New", monospace; background: #0f172a; color: #e2e8f0; }
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 24px; }
+    .panel { background: #111827; border: 1px solid #334155; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+    h1 { margin: 0 0 12px; font-size: 24px; }
+    .controls { display: grid; grid-template-columns: 120px 1fr 120px 1fr auto auto; gap: 12px; align-items: center; }
+    label { color: #94a3b8; font-size: 13px; }
+    input { width: 100%; box-sizing: border-box; background: #020617; border: 1px solid #475569; color: #e2e8f0; border-radius: 8px; padding: 10px 12px; }
+    button { border: 0; border-radius: 8px; padding: 10px 14px; font-weight: 600; cursor: pointer; }
+    button.primary { background: #22c55e; color: #052e16; }
+    button.secondary { background: #475569; color: #f8fafc; }
+    video { width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: 12px; border: 1px solid #334155; }
+    pre { margin: 0; white-space: pre-wrap; word-break: break-word; color: #cbd5e1; min-height: 160px; }
+    .hint { color: #94a3b8; font-size: 13px; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="panel">
+      <h1>WebRTC 拉流测试</h1>
+      <div class="controls">
+        <label for="app">app</label>
+        <input id="app" value="live" />
+        <label for="stream">stream</label>
+        <input id="stream" value="123456" />
+        <button id="start" class="primary">开始</button>
+        <button id="stop" class="secondary">停止</button>
+      </div>
+      <div class="hint">测试页会向 <code>/webrtc/play</code> 发送 offer，请先确保对应流已存在。</div>
+    </div>
+    <div class="panel">
+      <video id="video" autoplay playsinline controls muted></video>
+    </div>
+    <div class="panel">
+      <pre id="log"></pre>
+    </div>
+  </div>
+  <script>
+    let pc = null;
+    const video = document.getElementById("video");
+    const logBox = document.getElementById("log");
+    const log = (...args) => {
+      const line = args.map(v => typeof v === "string" ? v : JSON.stringify(v, null, 2)).join(" ");
+      logBox.textContent += line + "\n";
+      logBox.scrollTop = logBox.scrollHeight;
+      console.log(...args);
+    };
+    const stop = async () => {
+      if (pc) {
+        pc.getSenders().forEach(sender => sender.track && sender.track.stop && sender.track.stop());
+        pc.close();
+        pc = null;
+      }
+      video.srcObject = null;
+      log("peer connection stopped");
+    };
+    document.getElementById("stop").addEventListener("click", () => { stop(); });
+    document.getElementById("start").addEventListener("click", async () => {
+      await stop();
+      const app = document.getElementById("app").value.trim();
+      const stream = document.getElementById("stream").value.trim();
+      log("starting webrtc play", { app, stream });
+      pc = new RTCPeerConnection({ iceServers: [] });
+      pc.addTransceiver("video", { direction: "recvonly" });
+      pc.ontrack = (event) => {
+        log("ontrack", { kind: event.track && event.track.kind });
+        video.srcObject = event.streams && event.streams[0] ? event.streams[0] : new MediaStream([event.track]);
+      };
+      pc.oniceconnectionstatechange = () => log("iceConnectionState", pc.iceConnectionState);
+      pc.onconnectionstatechange = () => log("connectionState", pc.connectionState);
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          log("local candidate", event.candidate.candidate);
+        } else {
+          log("local candidate gathering complete");
+        }
+      };
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      log("local offer created");
+      const response = await fetch("/webrtc/play", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ app, stream, sdp: offer.sdp })
+      });
+      const json = await response.json();
+      log("play response", json);
+      if (!response.ok || !json || json.code !== 0 || !json.data || !json.data.sdp) {
+        throw new Error("play request failed");
+      }
+      await pc.setRemoteDescription({ type: "answer", sdp: json.data.sdp });
+      log("remote answer set");
+    });
+  </script>
+</body>
+</html>

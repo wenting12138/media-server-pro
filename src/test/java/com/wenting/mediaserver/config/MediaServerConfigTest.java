@@ -13,7 +13,8 @@ class MediaServerConfigTest {
         MediaServerConfig config = new MediaServerConfig(18080, 1554, 11935, 20000, 30000);
 
         assertEquals("memory", config.hlsStorage());
-        assertEquals("target/hls", config.hlsDirectory());
+        assertEquals("D:/workspace/github/wenting/mediaserver_data/hls", config.hlsDirectory());
+        assertEquals(18081, config.webrtcUdpPort());
         assertFalse(config.hlsFileStorageEnabled());
     }
 

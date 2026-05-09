@@ -8,6 +8,7 @@ public final class MediaServerConfig {
     private static final int DEFAULT_HTTP = 18080;
     private static final int DEFAULT_RTSP = 1554;
     private static final int DEFAULT_RTMP = 11935;
+    private static final int DEFAULT_WEBRTC_UDP = 18081;
     private static final int DEFAULT_RTP_PORT_MIN = 20000;
     private static final int DEFAULT_RTP_PORT_MAX = 30000;
     private static final String DEFAULT_HLS_STORAGE = "memory";
@@ -16,6 +17,7 @@ public final class MediaServerConfig {
     private final int httpPort;
     private final int rtspPort;
     private final int rtmpPort;
+    private final int webrtcUdpPort;
     private final int rtpPortMin;
     private final int rtpPortMax;
     private final String hlsStorage;
@@ -30,9 +32,32 @@ public final class MediaServerConfig {
             String hlsStorage,
             String hlsDirectory
     ) {
+        this(
+                httpPort,
+                rtspPort,
+                rtmpPort,
+                DEFAULT_WEBRTC_UDP,
+                rtpPortMin,
+                rtpPortMax,
+                hlsStorage,
+                hlsDirectory
+        );
+    }
+
+    public MediaServerConfig(
+            int httpPort,
+            int rtspPort,
+            int rtmpPort,
+            int webrtcUdpPort,
+            int rtpPortMin,
+            int rtpPortMax,
+            String hlsStorage,
+            String hlsDirectory
+    ) {
         this.httpPort = httpPort;
         this.rtspPort = rtspPort;
         this.rtmpPort = rtmpPort;
+        this.webrtcUdpPort = webrtcUdpPort;
         this.rtpPortMin = rtpPortMin;
         this.rtpPortMax = rtpPortMax;
         this.hlsStorage = normalizeHlsStorage(hlsStorage);
@@ -50,6 +75,7 @@ public final class MediaServerConfig {
                 httpPort,
                 rtspPort,
                 rtmpPort,
+                DEFAULT_WEBRTC_UDP,
                 rtpPortMin,
                 rtpPortMax,
                 DEFAULT_HLS_STORAGE,
@@ -61,6 +87,7 @@ public final class MediaServerConfig {
         int http = parsePort(System.getenv("MEDIA_HTTP_PORT"), DEFAULT_HTTP);
         int rtsp = parsePort(System.getenv("MEDIA_RTSP_PORT"), DEFAULT_RTSP);
         int rtmp = parsePort(System.getenv("MEDIA_RTMP_PORT"), DEFAULT_RTMP);
+        int webrtcUdp = parsePort(System.getenv("MEDIA_WEBRTC_UDP_PORT"), DEFAULT_WEBRTC_UDP);
         int rtpMin = parsePort(System.getenv("MEDIA_RTP_PORT_MIN"), DEFAULT_RTP_PORT_MIN);
         int rtpMax = parsePort(System.getenv("MEDIA_RTP_PORT_MAX"), DEFAULT_RTP_PORT_MAX);
         String hlsStorage = normalizeHlsStorage(System.getenv("MEDIA_HLS_STORAGE"));
@@ -78,6 +105,7 @@ public final class MediaServerConfig {
                 http,
                 rtsp,
                 rtmp,
+                webrtcUdp,
                 rtpMin,
                 rtpMax,
                 hlsStorage,
@@ -110,6 +138,10 @@ public final class MediaServerConfig {
 
     public int rtmpPort() {
         return rtmpPort;
+    }
+
+    public int webrtcUdpPort() {
+        return webrtcUdpPort;
     }
 
     public int rtpPortMin() {
