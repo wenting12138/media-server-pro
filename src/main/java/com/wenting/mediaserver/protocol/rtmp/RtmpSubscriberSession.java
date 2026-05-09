@@ -6,7 +6,14 @@ import com.wenting.mediaserver.core.enums.publish.CodecType;
 import com.wenting.mediaserver.core.enums.publish.TrackType;
 import com.wenting.mediaserver.core.model.StreamKey;
 import com.wenting.mediaserver.core.publish.InboundMediaFrame;
+import com.wenting.mediaserver.core.publish.InboundRtpPacket;
+import com.wenting.mediaserver.core.remux.rtmp.RtpToRtmpFrameAssembler;
+import com.wenting.mediaserver.core.track.ITrack;
 import io.netty.channel.Channel;
+
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 
 /**
  * RTMP subscriber write session for outbound live playback.
@@ -21,6 +28,8 @@ public final class RtmpSubscriberSession {
     private final StreamKey streamKey;
     private final Channel controlChannel;
     private final int messageStreamId;
+    private final RtpToRtmpFrameAssembler rtpToRtmpFrameAssembler = new RtpToRtmpFrameAssembler();
+    private final Map<String, ITrack> tracksById = new LinkedHashMap<String, ITrack>();
 
     public RtmpSubscriberSession(String sessionId, StreamKey streamKey, Channel controlChannel, Integer messageStreamId) {
         if (sessionId == null || sessionId.trim().isEmpty()) {
@@ -58,6 +67,23 @@ public final class RtmpSubscriberSession {
 
     public boolean isActive() {
         return controlChannel.isActive();
+    }
+
+    public void track(ITrack track) {
+        if (track == null || track.trackId() == null) {
+            return;
+        }
+        tracksById.put(track.trackId().trim(), track);
+    }
+
+    public void writeMediaPacket(InboundRtpPacket packet) {
+        if (packet == null || !isActive()) {
+            return;
+        }
+        List<InboundMediaFrame> frames = rtpToRtmpFrameAssembler.assemble(packet, tracksById.get(packet.frame().trackId()));
+        for (InboundMediaFrame frame : frames) {
+            writeInboundFrame(frame);
+        }
     }
 
     public void writeInboundFrame(InboundMediaFrame frame) {

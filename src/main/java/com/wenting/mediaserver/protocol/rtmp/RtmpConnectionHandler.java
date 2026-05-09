@@ -5,6 +5,7 @@ import com.wenting.mediaserver.core.model.StreamKey;
 import com.wenting.mediaserver.core.publish.DefaultPublishedStream;
 import com.wenting.mediaserver.core.publish.IPublishedStream;
 import com.wenting.mediaserver.core.registry.StreamRegistry;
+import com.wenting.mediaserver.core.track.ITrack;
 import com.wenting.mediaserver.core.codec.rtmp.RtmpAudioMessage;
 import com.wenting.mediaserver.core.codec.rtmp.RtmpCommandMessage;
 import com.wenting.mediaserver.core.codec.rtmp.RtmpMessage;
@@ -12,6 +13,7 @@ import com.wenting.mediaserver.core.codec.rtmp.RtmpSetChunkSizeMessage;
 import com.wenting.mediaserver.core.codec.rtmp.RtmpSetPeerBandwidthMessage;
 import com.wenting.mediaserver.core.codec.rtmp.RtmpVideoMessage;
 import com.wenting.mediaserver.core.codec.rtmp.RtmpWindowAcknowledgementSizeMessage;
+import com.wenting.mediaserver.protocol.rtsp.RtspSession;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.channel.ChannelHandlerContext;
 import org.slf4j.Logger;
@@ -255,12 +257,19 @@ public final class RtmpConnectionHandler extends SimpleChannelInboundHandler<Rtm
         }
         removeSubscriber();
         session().role(RtmpSessionRole.SUBSCRIBER);
-        subscriberAdapter = new RtmpSubscriberAdapter(new RtmpSubscriberSession(
+        RtmpSubscriberSession subscriberSession = new RtmpSubscriberSession(
                 session().sessionId(),
                 session().streamKey(),
                 ctx.channel(),
                 session().messageStreamId()
-        ));
+        );
+        RtspSession rtspPublisherSession = findRtspPublisherSession();
+        if (rtspPublisherSession != null) {
+            for (ITrack track : rtspPublisherSession.trackList()) {
+                subscriberSession.track(track);
+            }
+        }
+        subscriberAdapter = new RtmpSubscriberAdapter(subscriberSession);
         writePlayStatus(ctx, message.messageStreamId(), "status", "NetStream.Play.Start", "Start live playback.");
         publishedStream.addSubscriber(subscriberAdapter);
     }
@@ -359,7 +368,27 @@ public final class RtmpConnectionHandler extends SimpleChannelInboundHandler<Rtm
         if (streamRegistry == null) {
             return null;
         }
-        return streamRegistry.findPublishedStream(session().streamKey());
+        IPublishedStream stream = streamRegistry.findPublishedStream(session().streamKey());
+        if (stream != null) {
+            return stream;
+        }
+        return streamRegistry.findPublishedStreamByPath(session().streamKey().app(), session().streamKey().stream());
+    }
+
+    private RtspSession findRtspPublisherSession() {
+        if (streamRegistry == null || streamRegistry.getRtspSessionManager() == null || session().streamKey() == null) {
+            return null;
+        }
+        for (RtspSession candidate : streamRegistry.getRtspSessionManager().sessions()) {
+            if (candidate == null || !candidate.isPublisher() || candidate.streamKey() == null) {
+                continue;
+            }
+            if (session().streamKey().app().equals(candidate.streamKey().app())
+                    && session().streamKey().stream().equals(candidate.streamKey().stream())) {
+                return candidate;
+            }
+        }
+        return null;
     }
 
     private InetSocketAddress resolveRemoteAddress(ChannelHandlerContext ctx) {

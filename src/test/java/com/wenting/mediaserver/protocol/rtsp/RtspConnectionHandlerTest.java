@@ -380,6 +380,253 @@ class RtspConnectionHandlerTest {
     }
 
     @Test
+    void shouldDescribeAndPlayRtmpPublishedAudioVideoStreamOverRtsp() {
+        StreamRegistry registry = new StreamRegistry();
+        StreamKey streamKey = new StreamKey(StreamProtocol.RTMP, "live", "av01");
+        DefaultPublishedStream stream = new DefaultPublishedStream(streamKey);
+        registry.registerPublishedStream(streamKey, stream);
+        stream.onInboundFrame(new InboundMediaFrame(
+                StreamProtocol.RTMP,
+                TrackType.VIDEO,
+                CodecType.H264,
+                "rtmp-publisher",
+                streamKey,
+                "video-h264",
+                Long.valueOf(0L),
+                Long.valueOf(0L),
+                true,
+                true,
+                null,
+                new byte[]{
+                        0x01, 0x64, 0x00, 0x1F, (byte) 0xFF, (byte) 0xE1,
+                        0x00, 0x08, 0x67, 0x64, 0x00, 0x1F, (byte) 0xAC, (byte) 0xD9, 0x40, 0x78,
+                        0x01, 0x00, 0x04, 0x68, (byte) 0xEE, 0x3C, (byte) 0x80
+                }
+        ));
+        stream.onInboundFrame(new InboundMediaFrame(
+                StreamProtocol.RTMP,
+                TrackType.AUDIO,
+                CodecType.AAC,
+                "rtmp-publisher",
+                streamKey,
+                "audio-aac",
+                Long.valueOf(0L),
+                Long.valueOf(0L),
+                false,
+                true,
+                null,
+                new byte[]{0x11, (byte) 0x90}
+        ));
+        stream.onInboundFrame(new InboundMediaFrame(
+                StreamProtocol.RTMP,
+                TrackType.VIDEO,
+                CodecType.H264,
+                "rtmp-publisher",
+                streamKey,
+                "video-h264",
+                Long.valueOf(100L),
+                Long.valueOf(100L),
+                true,
+                false,
+                null,
+                new byte[]{
+                        0x00, 0x00, 0x00, 0x03,
+                        0x65, 0x11, 0x22
+                }
+        ));
+
+        EmbeddedChannel channel = new EmbeddedChannel(new RtspConnectionHandler(registry));
+
+        channel.writeInbound(request("DESCRIBE", "rtsp://example/live/av01", ""));
+        FullHttpResponse describeResponse = channel.readOutbound();
+        assertResponse(describeResponse, RtspResponseStatuses.OK, "1", false);
+        String sdp = describeResponse.content().toString(CharsetUtil.UTF_8);
+        assertTrue(sdp.contains("m=video 0 RTP/AVP 96"));
+        assertTrue(sdp.contains("a=control:video-h264"));
+        assertTrue(sdp.contains("m=audio 0 RTP/AVP 97"));
+        assertTrue(sdp.contains("a=control:audio-aac"));
+        describeResponse.release();
+
+        channel.writeInbound(request(
+                "SETUP",
+                "rtsp://example/live/av01/video-h264",
+                "",
+                "Transport", "RTP/AVP/TCP;unicast;interleaved=0-1"
+        ));
+        assertResponse(channel.readOutbound(), RtspResponseStatuses.OK, "1", true).release();
+
+        channel.writeInbound(request(
+                "SETUP",
+                "rtsp://example/live/av01/audio-aac",
+                "",
+                "Transport", "RTP/AVP/TCP;unicast;interleaved=2-3"
+        ));
+        assertResponse(channel.readOutbound(), RtspResponseStatuses.OK, "1", true).release();
+
+        channel.writeInbound(request("PLAY", "rtsp://example/live/av01", ""));
+
+        ByteBuf sps = (ByteBuf) channel.readOutbound();
+        ByteBuf pps = (ByteBuf) channel.readOutbound();
+        ByteBuf idr = (ByteBuf) channel.readOutbound();
+        Object response = channel.readOutbound();
+        assertEquals(0, sps.getUnsignedByte(1));
+        assertEquals(0, pps.getUnsignedByte(1));
+        assertEquals(0, idr.getUnsignedByte(1));
+        sps.release();
+        pps.release();
+        idr.release();
+        assertResponse(response, RtspResponseStatuses.OK, "1", true).release();
+
+        stream.onInboundFrame(new InboundMediaFrame(
+                StreamProtocol.RTMP,
+                TrackType.AUDIO,
+                CodecType.AAC,
+                "rtmp-publisher",
+                streamKey,
+                "audio-aac",
+                Long.valueOf(120L),
+                Long.valueOf(120L),
+                false,
+                false,
+                null,
+                new byte[]{0x55, 0x66}
+        ));
+
+        ByteBuf audio = channel.readOutbound();
+        assertNotNull(audio);
+        assertEquals('$', audio.readByte());
+        assertEquals(2, audio.readUnsignedByte());
+        audio.release();
+        assertFalse(channel.finishAndReleaseAll());
+    }
+
+    @Test
+    void shouldDescribeAndPlayRtmpPublishedHevcAacStreamOverRtsp() {
+        StreamRegistry registry = new StreamRegistry();
+        StreamKey streamKey = new StreamKey(StreamProtocol.RTMP, "live", "avhevc01");
+        DefaultPublishedStream stream = new DefaultPublishedStream(streamKey);
+        registry.registerPublishedStream(streamKey, stream);
+        stream.onInboundFrame(new InboundMediaFrame(
+                StreamProtocol.RTMP,
+                TrackType.VIDEO,
+                CodecType.H265,
+                "rtmp-publisher",
+                streamKey,
+                "video-h265",
+                Long.valueOf(0L),
+                Long.valueOf(0L),
+                true,
+                true,
+                null,
+                new byte[]{
+                        0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x03,
+                        0x20, 0x00, 0x01, 0x00, 0x03, 0x40, 0x01, 0x0C,
+                        0x21, 0x00, 0x01, 0x00, 0x03, 0x42, 0x01, 0x01,
+                        0x22, 0x00, 0x01, 0x00, 0x03, 0x44, 0x01, (byte) 0xC0
+                }
+        ));
+        stream.onInboundFrame(new InboundMediaFrame(
+                StreamProtocol.RTMP,
+                TrackType.AUDIO,
+                CodecType.AAC,
+                "rtmp-publisher",
+                streamKey,
+                "audio-aac",
+                Long.valueOf(0L),
+                Long.valueOf(0L),
+                false,
+                true,
+                null,
+                new byte[]{0x11, (byte) 0x90}
+        ));
+        stream.onInboundFrame(new InboundMediaFrame(
+                StreamProtocol.RTMP,
+                TrackType.VIDEO,
+                CodecType.H265,
+                "rtmp-publisher",
+                streamKey,
+                "video-h265",
+                Long.valueOf(100L),
+                Long.valueOf(100L),
+                true,
+                false,
+                null,
+                new byte[]{
+                        0x00, 0x00, 0x00, 0x04,
+                        0x26, 0x01, 0x11, 0x22
+                }
+        ));
+
+        EmbeddedChannel channel = new EmbeddedChannel(new RtspConnectionHandler(registry));
+
+        channel.writeInbound(request("DESCRIBE", "rtsp://example/live/avhevc01", ""));
+        FullHttpResponse describeResponse = channel.readOutbound();
+        assertResponse(describeResponse, RtspResponseStatuses.OK, "1", false);
+        String sdp = describeResponse.content().toString(CharsetUtil.UTF_8);
+        assertTrue(sdp.contains("m=video 0 RTP/AVP 98"));
+        assertTrue(sdp.contains("a=control:video-h265"));
+        assertTrue(sdp.contains("m=audio 0 RTP/AVP 97"));
+        assertTrue(sdp.contains("a=control:audio-aac"));
+        describeResponse.release();
+
+        channel.writeInbound(request(
+                "SETUP",
+                "rtsp://example/live/avhevc01/video-h265",
+                "",
+                "Transport", "RTP/AVP/TCP;unicast;interleaved=0-1"
+        ));
+        assertResponse(channel.readOutbound(), RtspResponseStatuses.OK, "1", true).release();
+
+        channel.writeInbound(request(
+                "SETUP",
+                "rtsp://example/live/avhevc01/audio-aac",
+                "",
+                "Transport", "RTP/AVP/TCP;unicast;interleaved=2-3"
+        ));
+        assertResponse(channel.readOutbound(), RtspResponseStatuses.OK, "1", true).release();
+
+        channel.writeInbound(request("PLAY", "rtsp://example/live/avhevc01", ""));
+
+        ByteBuf vps = (ByteBuf) channel.readOutbound();
+        ByteBuf sps = (ByteBuf) channel.readOutbound();
+        ByteBuf pps = (ByteBuf) channel.readOutbound();
+        ByteBuf idr = (ByteBuf) channel.readOutbound();
+        Object response = channel.readOutbound();
+        assertEquals(0, vps.getUnsignedByte(1));
+        assertEquals(0, sps.getUnsignedByte(1));
+        assertEquals(0, pps.getUnsignedByte(1));
+        assertEquals(0, idr.getUnsignedByte(1));
+        vps.release();
+        sps.release();
+        pps.release();
+        idr.release();
+        assertResponse(response, RtspResponseStatuses.OK, "1", true).release();
+
+        stream.onInboundFrame(new InboundMediaFrame(
+                StreamProtocol.RTMP,
+                TrackType.AUDIO,
+                CodecType.AAC,
+                "rtmp-publisher",
+                streamKey,
+                "audio-aac",
+                Long.valueOf(120L),
+                Long.valueOf(120L),
+                false,
+                false,
+                null,
+                new byte[]{0x55, 0x66}
+        ));
+
+        ByteBuf audio = channel.readOutbound();
+        assertNotNull(audio);
+        assertEquals('$', audio.readByte());
+        assertEquals(2, audio.readUnsignedByte());
+        audio.release();
+        assertFalse(channel.finishAndReleaseAll());
+    }
+
+    @Test
     void shouldFanoutInterleavedPacketToSubscriberAfterPlay() {
         StreamRegistry registry = new StreamRegistry();
         EmbeddedChannel publisherChannel = new EmbeddedChannel(new RtspConnectionHandler(registry));

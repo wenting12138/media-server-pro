@@ -30,6 +30,7 @@ public final class RtmpSubscriberAdapter implements MediaSubscriberAdapter {
 
     @Override
     public void writeMediaPacket(InboundRtpPacket packet) {
+        session.writeMediaPacket(packet);
     }
 
     @Override
