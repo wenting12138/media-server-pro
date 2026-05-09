@@ -48,7 +48,7 @@ final class TsMuxer {
         }
         ensureTables();
         if (frame.trackType() == com.wenting.mediaserver.core.enums.publish.TrackType.VIDEO) {
-            if (frame.codecType() == com.wenting.mediaserver.core.enums.publish.CodecType.H264){
+            if (frame.codecType() == com.wenting.mediaserver.core.enums.publish.CodecType.H264) {
                 writeVideoFrame(frame);
                 return;
             }
