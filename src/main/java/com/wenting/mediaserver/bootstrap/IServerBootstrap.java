@@ -1,4 +1,4 @@
-package com.wenting.mediaserver.config;
+package com.wenting.mediaserver.bootstrap;
 
 public interface IServerBootstrap {
 

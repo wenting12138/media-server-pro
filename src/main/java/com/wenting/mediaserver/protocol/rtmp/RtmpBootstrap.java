@@ -1,6 +1,6 @@
 package com.wenting.mediaserver.protocol.rtmp;
 
-import com.wenting.mediaserver.config.IServerBootstrap;
+import com.wenting.mediaserver.bootstrap.IServerBootstrap;
 import com.wenting.mediaserver.config.MediaServerConfig;
 import com.wenting.mediaserver.core.registry.StreamRegistry;
 import io.netty.bootstrap.ServerBootstrap;

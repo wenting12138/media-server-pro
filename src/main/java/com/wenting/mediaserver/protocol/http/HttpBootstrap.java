@@ -1,7 +1,7 @@
 package com.wenting.mediaserver.protocol.http;
 
 import com.wenting.mediaserver.api.HttpJsonApiHandler;
-import com.wenting.mediaserver.config.IServerBootstrap;
+import com.wenting.mediaserver.bootstrap.IServerBootstrap;
 import com.wenting.mediaserver.config.MediaServerConfig;
 import com.wenting.mediaserver.core.registry.StreamRegistry;
 import com.wenting.mediaserver.protocol.http.flv.HttpFlvHandler;

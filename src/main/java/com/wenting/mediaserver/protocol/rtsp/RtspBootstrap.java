@@ -1,11 +1,7 @@
 package com.wenting.mediaserver.protocol.rtsp;
 
-import com.wenting.mediaserver.config.IServerBootstrap;
+import com.wenting.mediaserver.bootstrap.IServerBootstrap;
 import com.wenting.mediaserver.config.MediaServerConfig;
-import com.wenting.mediaserver.core.publish.report.AvSyncSnapshot;
-import com.wenting.mediaserver.core.model.StreamKey;
-import com.wenting.mediaserver.core.publish.IPublishedStream;
-import com.wenting.mediaserver.core.publish.report.RtcpTrackStats;
 import com.wenting.mediaserver.core.registry.StreamRegistry;
 import com.wenting.mediaserver.core.stats.InMemoryTrafficStatsService;
 import com.wenting.mediaserver.core.enums.traffic.TrafficProtocol;
@@ -22,7 +18,6 @@ import org.slf4j.LoggerFactory;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.Map;
 
 public class RtspBootstrap implements IServerBootstrap {
     private static final long TRAFFIC_LOG_INTERVAL_SECONDS = 5;
