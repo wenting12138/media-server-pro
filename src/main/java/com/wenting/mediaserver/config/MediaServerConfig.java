@@ -10,7 +10,7 @@ public final class MediaServerConfig {
     private static final int DEFAULT_RTMP = 11935;
     private static final int DEFAULT_RTP_PORT_MIN = 20000;
     private static final int DEFAULT_RTP_PORT_MAX = 30000;
-    private static final String DEFAULT_HLS_STORAGE = "file";
+    private static final String DEFAULT_HLS_STORAGE = "memory";
     private static final String DEFAULT_HLS_DIRECTORY = "D:/workspace/github/wenting/mediaserver_data/hls";
 
     private final int httpPort;
