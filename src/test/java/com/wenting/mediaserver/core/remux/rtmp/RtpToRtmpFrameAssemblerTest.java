@@ -55,6 +55,54 @@ class RtpToRtmpFrameAssemblerTest {
         assertEquals(0x65, frames.get(1).payload()[4] & 0xFF);
     }
 
+    @Test
+    void shouldAssembleG711RtpIntoSingleRtmpAudioFrame() {
+        RtpToRtmpFrameAssembler assembler = new RtpToRtmpFrameAssembler();
+        StreamKey streamKey = new StreamKey(StreamProtocol.RTSP, "live", "cam02");
+
+        List<InboundMediaFrame> frames = assembler.assemble(rtpPacket(
+                streamKey,
+                "audio-g711a",
+                CodecType.G711A,
+                TrackType.AUDIO,
+                1,
+                160L,
+                true,
+                new byte[]{0x11, 0x22, 0x33, 0x44}
+        ), null);
+
+        assertEquals(1, frames.size());
+        assertEquals(CodecType.G711A, frames.get(0).codecType());
+        assertEquals(TrackType.AUDIO, frames.get(0).trackType());
+        assertEquals(4, frames.get(0).payloadLength());
+        assertEquals(0x11, frames.get(0).payload()[0] & 0xFF);
+        assertEquals(0x44, frames.get(0).payload()[3] & 0xFF);
+    }
+
+    @Test
+    void shouldAssembleG711uRtpIntoSingleRtmpAudioFrame() {
+        RtpToRtmpFrameAssembler assembler = new RtpToRtmpFrameAssembler();
+        StreamKey streamKey = new StreamKey(StreamProtocol.RTSP, "live", "cam03");
+
+        List<InboundMediaFrame> frames = assembler.assemble(rtpPacket(
+                streamKey,
+                "audio-g711u",
+                CodecType.G711U,
+                TrackType.AUDIO,
+                1,
+                160L,
+                true,
+                new byte[]{0x21, 0x32, 0x43}
+        ), null);
+
+        assertEquals(1, frames.size());
+        assertEquals(CodecType.G711U, frames.get(0).codecType());
+        assertEquals(TrackType.AUDIO, frames.get(0).trackType());
+        assertEquals(3, frames.get(0).payloadLength());
+        assertEquals(0x21, frames.get(0).payload()[0] & 0xFF);
+        assertEquals(0x43, frames.get(0).payload()[2] & 0xFF);
+    }
+
     private static int appendLengthPrefixedNal(byte[] target, int index, byte[] nal) {
         target[index++] = (byte) ((nal.length >> 8) & 0xFF);
         target[index++] = (byte) (nal.length & 0xFF);
@@ -101,7 +149,7 @@ class RtpToRtmpFrameAssemblerTest {
                         null,
                         packet
                 ),
-                90000,
+                trackType == TrackType.AUDIO ? 8000 : 90000,
                 false,
                 MediaPacketTransport.TCP_INTERLEAVED,
                 null,

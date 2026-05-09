@@ -39,8 +39,11 @@ public final class RtpToRtmpFrameAssembler {
         }
         InboundMediaFrame frame = packet.frame();
         if (frame.trackType() == TrackType.AUDIO) {
-            if(frame.codecType() == CodecType.AAC || frame.codecType() == CodecType.MPEG4_GENERIC){
+            if (frame.codecType() == CodecType.AAC || frame.codecType() == CodecType.MPEG4_GENERIC) {
                 return assembleAac(packet);
+            }
+            if (frame.codecType() == CodecType.G711A || frame.codecType() == CodecType.G711U) {
+                return assembleG711(packet);
             }
         }
         if (frame.trackType() == TrackType.VIDEO) {
@@ -229,6 +232,32 @@ public final class RtpToRtmpFrameAssembler {
                 copy(payload, dataOffset, auSizeBytes)
         ));
         return frames;
+    }
+
+    private List<InboundMediaFrame> assembleG711(InboundRtpPacket packet) {
+        byte[] payload = packet.frame().payload();
+        RtpParseResult parseResult = rtpPacketParser.parse(payload);
+        RtpPacketHeader header = parseResult == null ? null : parseResult.rtpHeader();
+        if (header == null || header.payloadLength() <= 0) {
+            return Collections.emptyList();
+        }
+        String trackId = packet.frame().trackId() == null ? "" : packet.frame().trackId().trim();
+        RtpToRtmpTrackState state = state(trackId);
+        Long timestampMillis = toTimestampMillis(state, packet.clockRate(), header.timestamp());
+        return Collections.singletonList(new InboundMediaFrame(
+                StreamProtocol.RTSP,
+                TrackType.AUDIO,
+                packet.frame().codecType(),
+                packet.frame().sessionId(),
+                packet.frame().streamKey(),
+                packet.frame().trackId(),
+                timestampMillis,
+                timestampMillis,
+                false,
+                false,
+                packet.frame().remoteAddress(),
+                copy(payload, header.payloadOffset(), header.payloadLength())
+        ));
     }
 
     private List<InboundMediaFrame> emitCompletedVideoAccessUnit(
