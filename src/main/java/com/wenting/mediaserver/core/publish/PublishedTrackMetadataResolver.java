@@ -5,6 +5,7 @@ import com.wenting.mediaserver.core.enums.publish.TrackType;
 import com.wenting.mediaserver.core.model.sdp.SdpMediaDescription;
 import com.wenting.mediaserver.core.model.sdp.SdpSessionDescription;
 
+import java.util.Base64;
 import java.util.Locale;
 
 public final class PublishedTrackMetadataResolver {
@@ -107,6 +108,28 @@ public final class PublishedTrackMetadataResolver {
         return false;
     }
 
+    public static byte[] resolveH264Sps(SdpSessionDescription description, String trackId) {
+        String[] parameterSets = splitSpropParameterSets(description, trackId);
+        return parameterSets.length > 0 ? decodeBase64(parameterSets[0]) : null;
+    }
+
+    public static byte[] resolveH264Pps(SdpSessionDescription description, String trackId) {
+        String[] parameterSets = splitSpropParameterSets(description, trackId);
+        return parameterSets.length > 1 ? decodeBase64(parameterSets[1]) : null;
+    }
+
+    public static byte[] resolveH265Vps(SdpSessionDescription description, String trackId) {
+        return decodeParameter(description, trackId, "sprop-vps");
+    }
+
+    public static byte[] resolveH265Sps(SdpSessionDescription description, String trackId) {
+        return decodeParameter(description, trackId, "sprop-sps");
+    }
+
+    public static byte[] resolveH265Pps(SdpSessionDescription description, String trackId) {
+        return decodeParameter(description, trackId, "sprop-pps");
+    }
+
     private static boolean matchesTrack(String control, String trackId) {
         if (control.isEmpty() || trackId.isEmpty()) {
             return false;
@@ -141,5 +164,40 @@ public final class PublishedTrackMetadataResolver {
 
     private static boolean hasValue(String value) {
         return value != null && !value.trim().isEmpty();
+    }
+
+    private static String[] splitSpropParameterSets(SdpSessionDescription description, String trackId) {
+        SdpMediaDescription media = findMediaDescription(description, trackId);
+        if (media == null) {
+            return new String[0];
+        }
+        String value = media.fmtpParameters().get("sprop-parameter-sets");
+        if (!hasValue(value)) {
+            return new String[0];
+        }
+        String[] parts = value.split(",");
+        for (int i = 0; i < parts.length; i++) {
+            parts[i] = parts[i] == null ? "" : parts[i].trim();
+        }
+        return parts;
+    }
+
+    private static byte[] decodeParameter(SdpSessionDescription description, String trackId, String parameterName) {
+        SdpMediaDescription media = findMediaDescription(description, trackId);
+        if (media == null) {
+            return null;
+        }
+        return decodeBase64(media.fmtpParameters().get(parameterName));
+    }
+
+    private static byte[] decodeBase64(String value) {
+        if (!hasValue(value)) {
+            return null;
+        }
+        try {
+            return Base64.getDecoder().decode(value.trim());
+        } catch (IllegalArgumentException ignore) {
+            return null;
+        }
     }
 }

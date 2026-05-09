@@ -44,7 +44,12 @@ public final class SdpTrackMapper {
                     codecType,
                     connectionAddress,
                     media.clockRate() == null ? 0 : media.clockRate().intValue(),
-                    PublishedTrackMetadataResolver.hasOutOfBandParameterSets(description, trackId)
+                    PublishedTrackMetadataResolver.hasOutOfBandParameterSets(description, trackId),
+                    PublishedTrackMetadataResolver.resolveH264Sps(description, trackId),
+                    PublishedTrackMetadataResolver.resolveH264Pps(description, trackId),
+                    PublishedTrackMetadataResolver.resolveH265Vps(description, trackId),
+                    PublishedTrackMetadataResolver.resolveH265Sps(description, trackId),
+                    PublishedTrackMetadataResolver.resolveH265Pps(description, trackId)
             );
         }
         if (trackType == TrackType.AUDIO) {

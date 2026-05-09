@@ -17,4 +17,24 @@ public interface ITrack {
     default boolean outOfBandParameterSetsReady() {
         return false;
     }
+
+    default byte[] h264Sps() {
+        return null;
+    }
+
+    default byte[] h264Pps() {
+        return null;
+    }
+
+    default byte[] h265Vps() {
+        return null;
+    }
+
+    default byte[] h265Sps() {
+        return null;
+    }
+
+    default byte[] h265Pps() {
+        return null;
+    }
 }
