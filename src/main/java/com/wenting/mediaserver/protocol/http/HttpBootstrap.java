@@ -14,6 +14,7 @@ import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.handler.codec.http.HttpObjectAggregator;
 import io.netty.handler.codec.http.HttpServerCodec;
+import io.netty.handler.stream.ChunkedWriteHandler;
 import io.netty.handler.logging.LogLevel;
 import io.netty.handler.logging.LoggingHandler;
 import org.slf4j.Logger;
@@ -43,6 +44,8 @@ public class HttpBootstrap implements IServerBootstrap {
                     protected void initChannel(SocketChannel ch) {
                         ch.pipeline().addLast(new HttpServerCodec());
                         ch.pipeline().addLast(new HttpObjectAggregator(65536));
+                        ch.pipeline().addLast(new ChunkedWriteHandler());
+                        ch.pipeline().addLast(new HttpFlvHandler(registry));
                         ch.pipeline().addLast(new HttpJsonApiHandler(config));
                     }
                 })
