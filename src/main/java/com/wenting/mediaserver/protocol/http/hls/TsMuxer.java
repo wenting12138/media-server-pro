@@ -52,7 +52,7 @@ final class TsMuxer {
                 writeVideoFrame(frame);
                 return;
             }
-            if (frame.codecType() == com.wenting.mediaserver.core.enums.publish.CodecType.H265)) {
+            if (frame.codecType() == com.wenting.mediaserver.core.enums.publish.CodecType.H265) {
                 writeVideoFrame(frame);
                 return;
             }
