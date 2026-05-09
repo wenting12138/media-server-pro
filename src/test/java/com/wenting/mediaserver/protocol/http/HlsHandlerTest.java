@@ -82,7 +82,7 @@ class HlsHandlerTest {
         HlsSessionManager sessionManager = new HlsSessionManager(registry);
         EmbeddedChannel channel = new EmbeddedChannel(new HlsHandler(registry, sessionManager));
 
-        channel.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/live/cam01/index.m3u8"));
+        channel.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/hls/live/cam01/index.m3u8"));
 
         FullHttpResponse playlistResponse = channel.readOutbound();
         assertNotNull(playlistResponse);
@@ -93,7 +93,7 @@ class HlsHandlerTest {
         assertTrue(body.contains("seg-00000.ts"));
         playlistResponse.release();
 
-        channel.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/live/cam01/seg-00000.ts"));
+        channel.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/hls/live/cam01/seg-00000.ts"));
         FullHttpResponse segmentResponse = channel.readOutbound();
         assertNotNull(segmentResponse);
         assertEquals(HttpResponseStatus.OK, segmentResponse.status());
@@ -110,7 +110,7 @@ class HlsHandlerTest {
         HlsSessionManager sessionManager = new HlsSessionManager(registry);
         EmbeddedChannel channel = new EmbeddedChannel(new HlsHandler(registry, sessionManager));
 
-        channel.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/live/missing/index.m3u8"));
+        channel.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/hls/live/missing/index.m3u8"));
 
         FullHttpResponse response = channel.readOutbound();
         assertNotNull(response);
@@ -174,7 +174,7 @@ class HlsHandlerTest {
         HlsSessionManager sessionManager = new HlsSessionManager(registry);
         EmbeddedChannel channel = new EmbeddedChannel(new HlsHandler(registry, sessionManager));
 
-        channel.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/live/cam02/index.m3u8"));
+        channel.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/hls/live/cam02/index.m3u8"));
         FullHttpResponse playlistResponse = channel.readOutbound();
         assertNotNull(playlistResponse);
         assertEquals(HttpResponseStatus.OK, playlistResponse.status());
@@ -183,7 +183,7 @@ class HlsHandlerTest {
         assertTrue(body.contains("seg-00000.ts"));
         playlistResponse.release();
 
-        channel.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/live/cam02/seg-00000.ts"));
+        channel.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/hls/live/cam02/seg-00000.ts"));
         FullHttpResponse segmentResponse = channel.readOutbound();
         assertNotNull(segmentResponse);
         assertEquals(HttpResponseStatus.OK, segmentResponse.status());
@@ -253,7 +253,7 @@ class HlsHandlerTest {
         HlsSessionManager sessionManager = new HlsSessionManager(registry);
         EmbeddedChannel channel = new EmbeddedChannel(new HlsHandler(registry, sessionManager));
 
-        channel.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/live/hevc01/index.m3u8"));
+        channel.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/hls/live/hevc01/index.m3u8"));
         FullHttpResponse playlistResponse = channel.readOutbound();
         assertNotNull(playlistResponse);
         assertEquals(HttpResponseStatus.OK, playlistResponse.status());
@@ -261,7 +261,7 @@ class HlsHandlerTest {
         assertTrue(body.contains("seg-00000.ts"));
         playlistResponse.release();
 
-        channel.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/live/hevc01/seg-00000.ts"));
+        channel.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/hls/live/hevc01/seg-00000.ts"));
         FullHttpResponse segmentResponse = channel.readOutbound();
         assertNotNull(segmentResponse);
         assertEquals(HttpResponseStatus.OK, segmentResponse.status());
@@ -336,7 +336,7 @@ class HlsHandlerTest {
         HlsSessionManager sessionManager = new HlsSessionManager(registry);
         EmbeddedChannel channel = new EmbeddedChannel(new HlsHandler(registry, sessionManager));
 
-        channel.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/live/hevc02/index.m3u8"));
+        channel.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/hls/live/hevc02/index.m3u8"));
         FullHttpResponse playlistResponse = channel.readOutbound();
         assertNotNull(playlistResponse);
         assertEquals(HttpResponseStatus.OK, playlistResponse.status());
@@ -344,7 +344,7 @@ class HlsHandlerTest {
         assertTrue(body.contains("seg-00000.ts"));
         playlistResponse.release();
 
-        channel.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/live/hevc02/seg-00000.ts"));
+        channel.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/hls/live/hevc02/seg-00000.ts"));
         FullHttpResponse segmentResponse = channel.readOutbound();
         assertNotNull(segmentResponse);
         assertEquals(HttpResponseStatus.OK, segmentResponse.status());

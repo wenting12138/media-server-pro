@@ -3,6 +3,7 @@ package com.wenting.mediaserver.protocol.http.hls;
 import com.wenting.mediaserver.core.model.StreamKey;
 import com.wenting.mediaserver.core.publish.IPublishedStream;
 import com.wenting.mediaserver.core.registry.StreamRegistry;
+import com.wenting.mediaserver.protocol.http.HttpRequestHandler;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
@@ -17,9 +18,10 @@ import io.netty.util.CharsetUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-public final class HlsHandler extends SimpleChannelInboundHandler<FullHttpRequest> {
+public final class HlsHandler extends SimpleChannelInboundHandler<FullHttpRequest> implements HttpRequestHandler {
 
     private static final Logger log = LoggerFactory.getLogger(HlsHandler.class);
+    private static final String HLS_PREFIX = "/hls/";
 
     private final StreamRegistry streamRegistry;
     private final HlsSessionManager hlsSessionManager;
@@ -31,15 +33,21 @@ public final class HlsHandler extends SimpleChannelInboundHandler<FullHttpReques
 
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, FullHttpRequest req) throws Exception {
-        if (!HttpMethod.GET.equals(req.method())) {
+        if (!matches(req)) {
             ctx.fireChannelRead(req.retain());
             return;
         }
+        handleRequest(ctx, req);
+    }
+
+    @Override
+    public boolean matches(FullHttpRequest req) {
+        return req != null && HttpMethod.GET.equals(req.method()) && parse(req.uri()) != null;
+    }
+
+    @Override
+    public void handleRequest(ChannelHandlerContext ctx, FullHttpRequest req) throws Exception {
         HlsPath hlsPath = parse(req.uri());
-        if (hlsPath == null) {
-            ctx.fireChannelRead(req.retain());
-            return;
-        }
         IPublishedStream stream = streamRegistry.findPublishedStreamByPath(hlsPath.app(), hlsPath.stream());
         if (stream == null) {
             writeError(ctx, HttpResponseStatus.NOT_FOUND, "stream not found");
@@ -79,7 +87,10 @@ public final class HlsHandler extends SimpleChannelInboundHandler<FullHttpReques
         if (queryIndex >= 0) {
             path = path.substring(0, queryIndex);
         }
-        String normalized = path.startsWith("/") ? path.substring(1) : path;
+        if (!path.startsWith(HLS_PREFIX)) {
+            return null;
+        }
+        String normalized = path.substring(HLS_PREFIX.length());
         String[] parts = normalized.split("/");
         if (parts.length != 3) {
             return null;

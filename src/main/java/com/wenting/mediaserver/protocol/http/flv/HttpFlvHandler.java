@@ -4,6 +4,7 @@ import com.wenting.mediaserver.core.model.StreamKey;
 import com.wenting.mediaserver.core.publish.IPublishedStream;
 import com.wenting.mediaserver.core.registry.StreamRegistry;
 import com.wenting.mediaserver.core.track.ITrack;
+import com.wenting.mediaserver.protocol.http.HttpRequestHandler;
 import com.wenting.mediaserver.protocol.rtsp.RtspSession;
 import com.wenting.mediaserver.protocol.rtsp.RtspSessionManager;
 import io.netty.channel.ChannelHandlerContext;
@@ -16,7 +17,9 @@ import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.http.HttpVersion;
 import io.netty.util.CharsetUtil;
 
-public final class HttpFlvHandler extends SimpleChannelInboundHandler<FullHttpRequest> {
+public final class HttpFlvHandler extends SimpleChannelInboundHandler<FullHttpRequest> implements HttpRequestHandler {
+
+    private static final String FLV_PREFIX = "/flv/";
 
     private final StreamRegistry streamRegistry;
 
@@ -26,15 +29,21 @@ public final class HttpFlvHandler extends SimpleChannelInboundHandler<FullHttpRe
 
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, FullHttpRequest req) {
-        if (!HttpMethod.GET.equals(req.method())) {
+        if (!matches(req)) {
             ctx.fireChannelRead(req.retain());
             return;
         }
+        handleRequest(ctx, req);
+    }
+
+    @Override
+    public boolean matches(FullHttpRequest req) {
+        return req != null && HttpMethod.GET.equals(req.method()) && parseFlvPath(req.uri()) != null;
+    }
+
+    @Override
+    public void handleRequest(ChannelHandlerContext ctx, FullHttpRequest req) {
         HttpFlvPath flvPath = parseFlvPath(req.uri());
-        if (flvPath == null) {
-            ctx.fireChannelRead(req.retain());
-            return;
-        }
         IPublishedStream stream = streamRegistry.findPublishedStreamByPath(flvPath.app(), flvPath.stream());
         if (stream == null) {
             writeError(ctx, HttpResponseStatus.NOT_FOUND, "stream not found");
@@ -99,7 +108,10 @@ public final class HttpFlvHandler extends SimpleChannelInboundHandler<FullHttpRe
         if (!path.endsWith(".flv")) {
             return null;
         }
-        String normalized = path.startsWith("/") ? path.substring(1) : path;
+        if (!path.startsWith(FLV_PREFIX)) {
+            return null;
+        }
+        String normalized = path.substring(FLV_PREFIX.length());
         int firstSlash = normalized.indexOf('/');
         if (firstSlash <= 0 || firstSlash == normalized.length() - 1) {
             return null;

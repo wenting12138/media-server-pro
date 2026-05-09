@@ -1,6 +1,6 @@
 package com.wenting.mediaserver.protocol.http;
 
-import com.wenting.mediaserver.api.HttpJsonApiHandler;
+import com.wenting.mediaserver.protocol.http.api.HttpJsonApiHandler;
 import com.wenting.mediaserver.bootstrap.IServerBootstrap;
 import com.wenting.mediaserver.config.MediaServerConfig;
 import com.wenting.mediaserver.core.registry.StreamRegistry;
@@ -54,9 +54,11 @@ public class HttpBootstrap implements IServerBootstrap {
                         ch.pipeline().addLast(new HttpServerCodec());
                         ch.pipeline().addLast(new HttpObjectAggregator(65536));
                         ch.pipeline().addLast(new ChunkedWriteHandler());
-                        ch.pipeline().addLast(new HlsHandler(registry, hlsSessionManager));
-                        ch.pipeline().addLast(new HttpFlvHandler(registry));
-                        ch.pipeline().addLast(new HttpJsonApiHandler(config));
+                        ch.pipeline().addLast(new HttpRouterHandler(
+                                new HlsHandler(registry, hlsSessionManager),
+                                new HttpFlvHandler(registry),
+                                new HttpJsonApiHandler(config)
+                        ));
                     }
                 })
                 .option(ChannelOption.SO_BACKLOG, 512)

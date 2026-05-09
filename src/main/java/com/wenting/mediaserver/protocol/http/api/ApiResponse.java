@@ -1,4 +1,4 @@
-package com.wenting.mediaserver.api;
+package com.wenting.mediaserver.protocol.http.api;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 

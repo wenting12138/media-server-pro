@@ -71,7 +71,7 @@ class HttpFlvHandlerTest {
         ));
 
         EmbeddedChannel channel = new EmbeddedChannel(new HttpFlvHandler(registry));
-        channel.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/live/cam01.flv"));
+        channel.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/flv/live/cam01.flv"));
 
         DefaultHttpResponse response = channel.readOutbound();
         DefaultHttpContent flvHeader = channel.readOutbound();
@@ -96,7 +96,7 @@ class HttpFlvHandlerTest {
         StreamRegistry registry = new StreamRegistry();
         EmbeddedChannel channel = new EmbeddedChannel(new HttpFlvHandler(registry));
 
-        channel.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/live/missing.flv"));
+        channel.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/flv/live/missing.flv"));
 
         io.netty.handler.codec.http.FullHttpResponse response = channel.readOutbound();
         assertNotNull(response);
@@ -123,7 +123,7 @@ class HttpFlvHandlerTest {
     void shouldPassThroughNonGetRequest() {
         StreamRegistry registry = new StreamRegistry();
         EmbeddedChannel channel = new EmbeddedChannel(new HttpFlvHandler(registry));
-        DefaultFullHttpRequest request = new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.POST, "/live/cam08.flv");
+        DefaultFullHttpRequest request = new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.POST, "/flv/live/cam08.flv");
 
         channel.writeInbound(request);
         DefaultFullHttpRequest forwarded = channel.readInbound();
@@ -176,7 +176,7 @@ class HttpFlvHandlerTest {
         ));
 
         EmbeddedChannel channel = new EmbeddedChannel(new HttpFlvHandler(registry));
-        channel.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/live/cam02.flv"));
+        channel.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/flv/live/cam02.flv"));
 
         DefaultHttpResponse response = channel.readOutbound();
         DefaultHttpContent flvHeader = channel.readOutbound();
@@ -240,7 +240,7 @@ class HttpFlvHandlerTest {
         ));
 
         EmbeddedChannel channel = new EmbeddedChannel(new HttpFlvHandler(registry));
-        channel.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/live/cam03.flv"));
+        channel.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/flv/live/cam03.flv"));
 
         DefaultHttpResponse response = channel.readOutbound();
         DefaultHttpContent flvHeader = channel.readOutbound();
@@ -349,7 +349,7 @@ class HttpFlvHandlerTest {
         ));
 
         EmbeddedChannel channel = new EmbeddedChannel(new HttpFlvHandler(registry));
-        channel.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/live/cam04.flv"));
+        channel.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/flv/live/cam04.flv"));
 
         DefaultHttpResponse response = channel.readOutbound();
         DefaultHttpContent flvHeader = channel.readOutbound();
@@ -442,7 +442,7 @@ class HttpFlvHandlerTest {
         ));
 
         EmbeddedChannel channel = new EmbeddedChannel(new HttpFlvHandler(registry));
-        channel.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/live/cam05.flv"));
+        channel.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/flv/live/cam05.flv"));
 
         DefaultHttpResponse response = channel.readOutbound();
         DefaultHttpContent flvHeader = channel.readOutbound();
@@ -499,12 +499,12 @@ class HttpFlvHandlerTest {
         ));
 
         EmbeddedChannel first = new EmbeddedChannel(new HttpFlvHandler(registry));
-        first.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/live/cam06.flv"));
+        first.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/flv/live/cam06.flv"));
         drainFlvResponse(first);
         first.finishAndReleaseAll();
 
         EmbeddedChannel second = new EmbeddedChannel(new HttpFlvHandler(registry));
-        second.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/live/cam06.flv"));
+        second.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/flv/live/cam06.flv"));
 
         DefaultHttpResponse response = second.readOutbound();
         DefaultHttpContent flvHeader = second.readOutbound();
@@ -566,12 +566,12 @@ class HttpFlvHandlerTest {
         ));
 
         EmbeddedChannel first = new EmbeddedChannel(new HttpFlvHandler(registry));
-        first.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/live/cam07.flv"));
+        first.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/flv/live/cam07.flv"));
         drainFlvResponse(first);
         first.finishAndReleaseAll();
 
         EmbeddedChannel second = new EmbeddedChannel(new HttpFlvHandler(registry));
-        second.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/live/cam07.flv"));
+        second.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/flv/live/cam07.flv"));
 
         DefaultHttpResponse response = second.readOutbound();
         DefaultHttpContent flvHeader = second.readOutbound();
