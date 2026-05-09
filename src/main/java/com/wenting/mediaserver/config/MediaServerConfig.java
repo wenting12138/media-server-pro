@@ -10,13 +10,34 @@ public final class MediaServerConfig {
     private static final int DEFAULT_RTMP = 11935;
     private static final int DEFAULT_RTP_PORT_MIN = 20000;
     private static final int DEFAULT_RTP_PORT_MAX = 30000;
-    private static final String DEFAULT_MEDIA_IP = "192.168.3.52";
+    private static final String DEFAULT_HLS_STORAGE = "file";
+    private static final String DEFAULT_HLS_DIRECTORY = "D:/workspace/github/wenting/mediaserver_data/hls";
 
     private final int httpPort;
     private final int rtspPort;
     private final int rtmpPort;
     private final int rtpPortMin;
     private final int rtpPortMax;
+    private final String hlsStorage;
+    private final String hlsDirectory;
+
+    public MediaServerConfig(
+            int httpPort,
+            int rtspPort,
+            int rtmpPort,
+            int rtpPortMin,
+            int rtpPortMax,
+            String hlsStorage,
+            String hlsDirectory
+    ) {
+        this.httpPort = httpPort;
+        this.rtspPort = rtspPort;
+        this.rtmpPort = rtmpPort;
+        this.rtpPortMin = rtpPortMin;
+        this.rtpPortMax = rtpPortMax;
+        this.hlsStorage = normalizeHlsStorage(hlsStorage);
+        this.hlsDirectory = normalizeHlsDirectory(hlsDirectory);
+    }
 
     public MediaServerConfig(
             int httpPort,
@@ -25,11 +46,15 @@ public final class MediaServerConfig {
             int rtpPortMin,
             int rtpPortMax
     ) {
-        this.httpPort = httpPort;
-        this.rtspPort = rtspPort;
-        this.rtmpPort = rtmpPort;
-        this.rtpPortMin = rtpPortMin;
-        this.rtpPortMax = rtpPortMax;
+        this(
+                httpPort,
+                rtspPort,
+                rtmpPort,
+                rtpPortMin,
+                rtpPortMax,
+                DEFAULT_HLS_STORAGE,
+                DEFAULT_HLS_DIRECTORY
+        );
     }
 
     public static MediaServerConfig fromEnvironment() {
@@ -38,6 +63,8 @@ public final class MediaServerConfig {
         int rtmp = parsePort(System.getenv("MEDIA_RTMP_PORT"), DEFAULT_RTMP);
         int rtpMin = parsePort(System.getenv("MEDIA_RTP_PORT_MIN"), DEFAULT_RTP_PORT_MIN);
         int rtpMax = parsePort(System.getenv("MEDIA_RTP_PORT_MAX"), DEFAULT_RTP_PORT_MAX);
+        String hlsStorage = normalizeHlsStorage(System.getenv("MEDIA_HLS_STORAGE"));
+        String hlsDirectory = normalizeHlsDirectory(System.getenv("MEDIA_HLS_DIRECTORY"));
         if (rtpMin > rtpMax) {
             int t = rtpMin;
             rtpMin = rtpMax;
@@ -52,7 +79,9 @@ public final class MediaServerConfig {
                 rtsp,
                 rtmp,
                 rtpMin,
-                rtpMax
+                rtpMax,
+                hlsStorage,
+                hlsDirectory
         );
     }
 
@@ -91,6 +120,18 @@ public final class MediaServerConfig {
         return rtpPortMax;
     }
 
+    public String hlsStorage() {
+        return hlsStorage;
+    }
+
+    public String hlsDirectory() {
+        return hlsDirectory;
+    }
+
+    public boolean hlsFileStorageEnabled() {
+        return "file".equals(hlsStorage);
+    }
+
     public String version() {
         String v = MediaServerConfig.class.getPackage().getImplementationVersion();
         return v != null ? v : "0.1.0-SNAPSHOT";
@@ -98,5 +139,20 @@ public final class MediaServerConfig {
 
     public String serverId() {
         return "media-server";
+    }
+
+    private static String normalizeHlsStorage(String raw) {
+        if (raw == null || raw.trim().isEmpty()) {
+            return DEFAULT_HLS_STORAGE;
+        }
+        String normalized = raw.trim().toLowerCase(java.util.Locale.ROOT);
+        return "file".equals(normalized) ? "file" : DEFAULT_HLS_STORAGE;
+    }
+
+    private static String normalizeHlsDirectory(String raw) {
+        if (raw == null || raw.trim().isEmpty()) {
+            return DEFAULT_HLS_DIRECTORY;
+        }
+        return raw.trim();
     }
 }

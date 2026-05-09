@@ -23,6 +23,8 @@ import io.netty.handler.logging.LoggingHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.nio.file.Paths;
+
 public class HttpBootstrap implements IServerBootstrap {
     private final Logger log = LoggerFactory.getLogger(HttpBootstrap.class);
     private final EventLoopGroup boss = new NioEventLoopGroup(1);
@@ -35,7 +37,9 @@ public class HttpBootstrap implements IServerBootstrap {
     public HttpBootstrap(MediaServerConfig config, StreamRegistry registry) {
         this.config = config;
         this.registry = registry;
-        this.hlsSessionManager = new HlsSessionManager(registry);
+        this.hlsSessionManager = config.hlsFileStorageEnabled()
+                ? new HlsSessionManager(registry, Paths.get(config.hlsDirectory()))
+                : new HlsSessionManager(registry);
     }
 
     @Override
@@ -59,6 +63,7 @@ public class HttpBootstrap implements IServerBootstrap {
                 .childOption(ChannelOption.TCP_NODELAY, true);
         this.httpChannel = http.bind(config.httpPort()).sync().channel();
         log.info("HTTP API listening on {}", httpChannel.localAddress());
+        log.info("HTTP HLS storage={} directory={}", config.hlsStorage(), config.hlsDirectory());
     }
 
     @Override

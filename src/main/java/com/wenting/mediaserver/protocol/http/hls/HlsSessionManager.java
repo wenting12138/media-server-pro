@@ -7,6 +7,7 @@ import com.wenting.mediaserver.core.track.ITrack;
 import com.wenting.mediaserver.protocol.rtsp.RtspSession;
 import com.wenting.mediaserver.protocol.rtsp.RtspSessionManager;
 
+import java.nio.file.Path;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -16,10 +17,20 @@ public final class HlsSessionManager implements AutoCloseable {
     private static final long DEFAULT_TARGET_DURATION_MILLIS = 2000L;
 
     private final StreamRegistry streamRegistry;
+    private final HlsStorageFactory storageFactory;
     private final Map<StreamKey, HlsSession> sessionsByStreamKey = new ConcurrentHashMap<StreamKey, HlsSession>();
 
     public HlsSessionManager(StreamRegistry streamRegistry) {
+        this(streamRegistry, new InMemoryHlsStorageFactory());
+    }
+
+    public HlsSessionManager(StreamRegistry streamRegistry, HlsStorageFactory storageFactory) {
         this.streamRegistry = streamRegistry;
+        this.storageFactory = storageFactory;
+    }
+
+    public HlsSessionManager(StreamRegistry streamRegistry, Path rootDirectory) {
+        this(streamRegistry, new FileHlsStorageFactory(rootDirectory));
     }
 
     public HlsSession ensureSession(StreamKey streamKey, IPublishedStream stream) {
@@ -34,7 +45,8 @@ public final class HlsSessionManager implements AutoCloseable {
                 "hls-" + streamKey.app() + "-" + streamKey.stream(),
                 streamKey,
                 DEFAULT_PLAYLIST_SIZE,
-                DEFAULT_TARGET_DURATION_MILLIS
+                DEFAULT_TARGET_DURATION_MILLIS,
+                storageFactory.create(streamKey, DEFAULT_PLAYLIST_SIZE)
         );
         attachRtspTracksIfPresent(created, streamKey);
         HlsSession previous = sessionsByStreamKey.putIfAbsent(streamKey, created);
@@ -61,6 +73,9 @@ public final class HlsSessionManager implements AutoCloseable {
 
     @Override
     public void close() {
+        for (HlsSession session : sessionsByStreamKey.values()) {
+            session.close();
+        }
         sessionsByStreamKey.clear();
     }
 }
