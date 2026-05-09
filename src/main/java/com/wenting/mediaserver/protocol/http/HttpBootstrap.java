@@ -5,6 +5,8 @@ import com.wenting.mediaserver.bootstrap.IServerBootstrap;
 import com.wenting.mediaserver.config.MediaServerConfig;
 import com.wenting.mediaserver.core.registry.StreamRegistry;
 import com.wenting.mediaserver.protocol.http.flv.HttpFlvHandler;
+import com.wenting.mediaserver.protocol.http.hls.HlsHandler;
+import com.wenting.mediaserver.protocol.http.hls.HlsSessionManager;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelInitializer;
@@ -27,11 +29,13 @@ public class HttpBootstrap implements IServerBootstrap {
     private final EventLoopGroup worker = new NioEventLoopGroup();
     private final MediaServerConfig config;
     private final StreamRegistry registry;
+    private final HlsSessionManager hlsSessionManager;
     private Channel httpChannel;
 
     public HttpBootstrap(MediaServerConfig config, StreamRegistry registry) {
         this.config = config;
         this.registry = registry;
+        this.hlsSessionManager = new HlsSessionManager(registry);
     }
 
     @Override
@@ -46,6 +50,7 @@ public class HttpBootstrap implements IServerBootstrap {
                         ch.pipeline().addLast(new HttpServerCodec());
                         ch.pipeline().addLast(new HttpObjectAggregator(65536));
                         ch.pipeline().addLast(new ChunkedWriteHandler());
+                        ch.pipeline().addLast(new HlsHandler(registry, hlsSessionManager));
                         ch.pipeline().addLast(new HttpFlvHandler(registry));
                         ch.pipeline().addLast(new HttpJsonApiHandler(config));
                     }
@@ -66,6 +71,7 @@ public class HttpBootstrap implements IServerBootstrap {
         if (this.httpChannel != null) {
             this.httpChannel.close();
         }
+        this.hlsSessionManager.close();
         this.worker.shutdownGracefully();
         this.boss.shutdownGracefully();
     }
