@@ -84,11 +84,17 @@ class WebRtcUdpPacketHandlerTest {
         stunResponse.release();
 
         channel.writeInbound(new DatagramPacket(Unpooled.wrappedBuffer(DtlsClientHelloParserTest.sampleClientHello()), localAddress, remoteAddress));
+        DatagramPacket dtlsResponse = channel.readOutbound();
 
         assertEquals(DtlsTransportState.SRTP_KEYING_EXPORTED, session.dtlsServerTransport().state());
         assertEquals(remoteAddress, session.dtlsServerTransport().remoteAddress());
         assertNotNull(session.dtlsServerTransport().srtpKeyingMaterial());
         assertTrue(session.dtlsServerTransport().srtpKeyingMaterial().raw().length > 0);
+        assertNotNull(dtlsResponse);
+        assertEquals(remoteAddress, dtlsResponse.recipient());
+        assertEquals(22, dtlsResponse.content().getUnsignedByte(0));
+        assertEquals(2, dtlsResponse.content().getUnsignedByte(13));
+        dtlsResponse.release();
         channel.finishAndReleaseAll();
     }
 

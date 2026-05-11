@@ -15,12 +15,15 @@ public final class DtlsServerTransport {
     private final String sessionId;
     private final WebRtcCertificate certificate;
     private final DtlsClientHelloParser clientHelloParser = new DtlsClientHelloParser();
+    private final DtlsServerHelloEncoder serverHelloEncoder = new DtlsServerHelloEncoder();
     private final SecureRandom secureRandom = new SecureRandom();
 
     private volatile DtlsTransportState state = DtlsTransportState.NEW;
     private volatile InetSocketAddress remoteAddress;
     private volatile byte[] clientRandom = new byte[0];
     private volatile byte[] serverRandom = new byte[0];
+    private volatile byte[] lastClientHello = new byte[0];
+    private volatile byte[] lastServerHelloFlight = new byte[0];
     private volatile SrtpKeyingMaterial srtpKeyingMaterial;
 
     public DtlsServerTransport(String sessionId, WebRtcCertificate certificate) {
@@ -48,16 +51,25 @@ public final class DtlsServerTransport {
         return srtpKeyingMaterial;
     }
 
+    public byte[] lastClientHello() {
+        return copy(lastClientHello);
+    }
+
+    public byte[] lastServerHelloFlight() {
+        return copy(lastServerHelloFlight);
+    }
+
     public boolean looksLikeClientHello(byte[] packet) {
         return clientHelloParser.looksLikeClientHello(packet);
     }
 
-    public boolean handleClientHello(byte[] packet, InetSocketAddress remoteAddress) {
+    public byte[] handleClientHello(byte[] packet, InetSocketAddress remoteAddress) {
         DtlsClientHello clientHello = clientHelloParser.parse(packet);
         if (clientHello == null) {
-            return false;
+            return null;
         }
         this.remoteAddress = remoteAddress;
+        this.lastClientHello = copy(packet);
         this.clientRandom = clientHello.random();
         if (serverRandom.length == 0) {
             byte[] randomBytes = new byte[32];
@@ -65,9 +77,20 @@ public final class DtlsServerTransport {
             this.serverRandom = randomBytes;
         }
         this.state = DtlsTransportState.CLIENT_HELLO_RECEIVED;
+        this.lastServerHelloFlight = serverHelloEncoder.encode(serverRandom);
+        this.state = DtlsTransportState.SERVER_HELLO_PREPARED;
         this.srtpKeyingMaterial = exportSrtpKeyingMaterial();
-        this.state = DtlsTransportState.SRTP_KEYING_EXPORTED;
-        return true;
+        return copy(lastServerHelloFlight);
+    }
+
+    public void markServerHelloSent() {
+        if (lastServerHelloFlight.length == 0) {
+            return;
+        }
+        this.state = DtlsTransportState.SERVER_HELLO_SENT;
+        if (srtpKeyingMaterial != null && srtpKeyingMaterial.raw().length > 0) {
+            this.state = DtlsTransportState.SRTP_KEYING_EXPORTED;
+        }
     }
 
     public SrtpKeyingMaterial exportSrtpKeyingMaterial() {

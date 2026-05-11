@@ -10,8 +10,6 @@ import io.netty.channel.socket.DatagramPacket;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.net.InetSocketAddress;
-
 public final class WebRtcUdpPacketHandler extends SimpleChannelInboundHandler<DatagramPacket> {
 
     private static final Logger log = LoggerFactory.getLogger(WebRtcUdpPacketHandler.class);
@@ -30,7 +28,7 @@ public final class WebRtcUdpPacketHandler extends SimpleChannelInboundHandler<Da
         packet.content().getBytes(packet.content().readerIndex(), bytes);
         StunMessage message = stunMessageCodec.decode(bytes);
         if (message == null) {
-            handleDtlsPacket(packet, bytes);
+            handleDtlsPacket(ctx, packet, bytes);
             return;
         }
         if (message.type() != StunMessageType.BINDING_REQUEST) {
@@ -56,7 +54,7 @@ public final class WebRtcUdpPacketHandler extends SimpleChannelInboundHandler<Da
         ctx.writeAndFlush(new DatagramPacket(Unpooled.wrappedBuffer(response), packet.sender()));
     }
 
-    private void handleDtlsPacket(DatagramPacket packet, byte[] bytes) {
+    private void handleDtlsPacket(ChannelHandlerContext ctx, DatagramPacket packet, byte[] bytes) {
         WebRtcPeerSession session = sessionManager.findByRemoteAddress(packet.sender());
         if (session == null || session.dtlsServerTransport() == null) {
             if (log.isDebugEnabled()) {
@@ -64,18 +62,23 @@ public final class WebRtcUdpPacketHandler extends SimpleChannelInboundHandler<Da
             }
             return;
         }
-        if (!session.dtlsServerTransport().handleClientHello(bytes, packet.sender())) {
+        byte[] serverHelloFlight = session.dtlsServerTransport().handleClientHello(bytes, packet.sender());
+        if (serverHelloFlight == null) {
             if (log.isDebugEnabled()) {
                 log.debug("Ignoring non-ClientHello DTLS packet session={} remote={}", session.sessionId(), packet.sender());
             }
             return;
         }
+        session.dtlsServerTransport().markServerHelloSent();
         log.info(
                 "Received DTLS ClientHello session={} remote={} state={}",
                 session.sessionId(),
                 packet.sender(),
                 session.dtlsServerTransport().state()
         );
+        if (serverHelloFlight.length > 0) {
+            ctx.writeAndFlush(new DatagramPacket(Unpooled.wrappedBuffer(serverHelloFlight), packet.sender()));
+        }
     }
 
     private String extractLocalUfrag(String username) {
