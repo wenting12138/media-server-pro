@@ -49,6 +49,7 @@ public final class WebRtcPlayHandler extends SimpleChannelInboundHandler<FullHtt
     private final WebRtcOfferParser offerParser = new WebRtcOfferParser();
     private final WebRtcSdpAnswerBuilder answerBuilder = new WebRtcSdpAnswerBuilder();
     private final int candidatePort;
+    private final String configuredCandidateIp;
     private final WebRtcCertificateManager certificateManager;
     private final WebRtcDatagramSender datagramSender;
 
@@ -57,7 +58,7 @@ public final class WebRtcPlayHandler extends SimpleChannelInboundHandler<FullHtt
             WebRtcSessionManager sessionManager,
             int candidatePort
     ) {
-        this(streamRegistry, sessionManager, candidatePort, null, new WebRtcCertificateManager());
+        this(streamRegistry, sessionManager, candidatePort, null, null, new WebRtcCertificateManager());
     }
 
     public WebRtcPlayHandler(
@@ -66,19 +67,31 @@ public final class WebRtcPlayHandler extends SimpleChannelInboundHandler<FullHtt
             int candidatePort,
             WebRtcDatagramSender datagramSender
     ) {
-        this(streamRegistry, sessionManager, candidatePort, datagramSender, new WebRtcCertificateManager());
+        this(streamRegistry, sessionManager, candidatePort, null, datagramSender, new WebRtcCertificateManager());
     }
 
     public WebRtcPlayHandler(
             StreamRegistry streamRegistry,
             WebRtcSessionManager sessionManager,
             int candidatePort,
+            String configuredCandidateIp,
+            WebRtcDatagramSender datagramSender
+    ) {
+        this(streamRegistry, sessionManager, candidatePort, configuredCandidateIp, datagramSender, new WebRtcCertificateManager());
+    }
+
+    public WebRtcPlayHandler(
+            StreamRegistry streamRegistry,
+            WebRtcSessionManager sessionManager,
+            int candidatePort,
+            String configuredCandidateIp,
             WebRtcDatagramSender datagramSender,
             WebRtcCertificateManager certificateManager
     ) {
         this.streamRegistry = streamRegistry;
         this.sessionManager = sessionManager;
         this.candidatePort = candidatePort;
+        this.configuredCandidateIp = configuredCandidateIp;
         this.datagramSender = datagramSender;
         this.certificateManager = certificateManager == null ? new WebRtcCertificateManager() : certificateManager;
     }
@@ -89,7 +102,7 @@ public final class WebRtcPlayHandler extends SimpleChannelInboundHandler<FullHtt
             int candidatePort,
             WebRtcCertificateManager certificateManager
     ) {
-        this(streamRegistry, sessionManager, candidatePort, null, certificateManager);
+        this(streamRegistry, sessionManager, candidatePort, null, null, certificateManager);
     }
 
     @Override
@@ -138,7 +151,7 @@ public final class WebRtcPlayHandler extends SimpleChannelInboundHandler<FullHtt
         String fingerprint = certificateManager.certificate().fingerprintSha256();
         StreamProtocol sourceProtocol = stream.getProtocol() == null ? StreamProtocol.UNKNOWN : stream.getProtocol();
         StreamKey targetStreamKey = new StreamKey(sourceProtocol, playRequest.getApp().trim(), playRequest.getStream().trim());
-        String candidateIp = resolveCandidateIp(ctx);
+        String candidateIp = resolveCandidateIp(ctx, req);
         int selectedCandidatePort = resolveCandidatePort(ctx);
         IceAgent iceAgent = new IceAgent(iceUfrag, icePwd);
         iceAgent.addHostCandidate(candidateIp, selectedCandidatePort);
@@ -199,7 +212,18 @@ public final class WebRtcPlayHandler extends SimpleChannelInboundHandler<FullHtt
         return queryIndex >= 0 ? uri.substring(0, queryIndex) : uri;
     }
 
-    private String resolveCandidateIp(ChannelHandlerContext ctx) {
+    private String resolveCandidateIp(ChannelHandlerContext ctx, FullHttpRequest req) {
+        if (!isWildcardHost(configuredCandidateIp)) {
+            return configuredCandidateIp;
+        }
+        String forwardedHost = firstHost(req == null ? null : req.headers().get("X-Forwarded-Host"));
+        if (!isWildcardHost(forwardedHost)) {
+            return forwardedHost;
+        }
+        String hostHeader = firstHost(req == null ? null : req.headers().get(HttpHeaderNames.HOST));
+        if (!isWildcardHost(hostHeader)) {
+            return hostHeader;
+        }
         if (ctx == null || !(ctx.channel().localAddress() instanceof InetSocketAddress)) {
             return "127.0.0.1";
         }
@@ -212,6 +236,31 @@ public final class WebRtcPlayHandler extends SimpleChannelInboundHandler<FullHtt
             return "127.0.0.1";
         }
         return host;
+    }
+
+    private String firstHost(String rawHostHeader) {
+        if (rawHostHeader == null || rawHostHeader.trim().isEmpty()) {
+            return null;
+        }
+        String normalized = rawHostHeader.trim();
+        int commaIndex = normalized.indexOf(',');
+        if (commaIndex >= 0) {
+            normalized = normalized.substring(0, commaIndex).trim();
+        }
+        if (normalized.startsWith("[")) {
+            int closingIndex = normalized.indexOf(']');
+            return closingIndex > 1 ? normalized.substring(1, closingIndex) : normalized;
+        }
+        int colonIndex = normalized.indexOf(':');
+        return colonIndex > 0 ? normalized.substring(0, colonIndex) : normalized;
+    }
+
+    private boolean isWildcardHost(String host) {
+        return host == null
+                || host.trim().isEmpty()
+                || "0.0.0.0".equals(host)
+                || "::".equals(host)
+                || "::1".equals(host);
     }
 
     private int resolveCandidatePort(ChannelHandlerContext ctx) {

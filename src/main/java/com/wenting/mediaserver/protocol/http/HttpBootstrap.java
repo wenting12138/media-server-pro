@@ -71,7 +71,13 @@ public class HttpBootstrap implements IServerBootstrap {
                                 new WebRtcTestPageHandler(),
                                 new HlsHandler(registry, hlsSessionManager),
                                 new HttpFlvHandler(registry),
-                                new WebRtcPlayHandler(registry, webRtcSessionManager, config.webrtcUdpPort(), webRtcDatagramSender),
+                                new WebRtcPlayHandler(
+                                        registry,
+                                        webRtcSessionManager,
+                                        config.webrtcUdpPort(),
+                                        config.webrtcPublicIp(),
+                                        webRtcDatagramSender
+                                ),
                                 new HttpJsonApiHandler(config)
                         ));
                     }

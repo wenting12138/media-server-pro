@@ -50,6 +50,30 @@ class WebRtcPlayHandlerTest {
     }
 
     @Test
+    void shouldUseHttpHostHeaderForCandidateWhenServerBindsWildcardAddress() throws Exception {
+        StreamRegistry registry = new StreamRegistry();
+        registry.registerPublishedStream(
+                new StreamKey(StreamProtocol.RTMP, "live", "cam-host"),
+                new DefaultPublishedStream(new StreamKey(StreamProtocol.RTMP, "live", "cam-host"))
+        );
+        WebRtcSessionManager sessionManager = new WebRtcSessionManager();
+        EmbeddedChannel channel = new EmbeddedChannel(new WebRtcPlayHandler(registry, sessionManager, 18081));
+
+        DefaultFullHttpRequest request = request("{\"app\":\"live\",\"stream\":\"cam-host\",\"sdp\":\"" + escapeJson(offerWithH264()) + "\"}");
+        request.headers().set("Host", "192.168.1.10:18080");
+        channel.writeInbound(request);
+
+        FullHttpResponse response = channel.readOutbound();
+        assertEquals(200, response.status().code());
+        JsonNode root = objectMapper.readTree(response.content().toString(CharsetUtil.UTF_8));
+        String answerSdp = root.get("data").get("sdp").asText();
+        assertTrue(answerSdp.contains("c=IN IP4 192.168.1.10"));
+        assertTrue(answerSdp.contains("a=candidate:1 1 udp 2130706431 192.168.1.10 18081 typ host"));
+        response.release();
+        channel.finishAndReleaseAll();
+    }
+
+    @Test
     void shouldRejectOfferWithoutH264Video() throws Exception {
         StreamRegistry registry = new StreamRegistry();
         registry.registerPublishedStream(

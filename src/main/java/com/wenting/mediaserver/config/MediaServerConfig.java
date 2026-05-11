@@ -9,6 +9,7 @@ public final class MediaServerConfig {
     private static final int DEFAULT_RTSP = 1554;
     private static final int DEFAULT_RTMP = 11935;
     private static final int DEFAULT_WEBRTC_UDP = 18081;
+    private static final String MEDIA_WEBRTC_PUBLIC_IP = "192.168.3.52";
     private static final int DEFAULT_RTP_PORT_MIN = 20000;
     private static final int DEFAULT_RTP_PORT_MAX = 30000;
     private static final String DEFAULT_HLS_STORAGE = "memory";
@@ -22,6 +23,7 @@ public final class MediaServerConfig {
     private final int rtpPortMax;
     private final String hlsStorage;
     private final String hlsDirectory;
+    private final String webrtcPublicIp;
 
     public MediaServerConfig(
             int httpPort,
@@ -40,7 +42,8 @@ public final class MediaServerConfig {
                 rtpPortMin,
                 rtpPortMax,
                 hlsStorage,
-                hlsDirectory
+                hlsDirectory,
+                null
         );
     }
 
@@ -54,6 +57,30 @@ public final class MediaServerConfig {
             String hlsStorage,
             String hlsDirectory
     ) {
+        this(
+                httpPort,
+                rtspPort,
+                rtmpPort,
+                webrtcUdpPort,
+                rtpPortMin,
+                rtpPortMax,
+                hlsStorage,
+                hlsDirectory,
+                null
+        );
+    }
+
+    public MediaServerConfig(
+            int httpPort,
+            int rtspPort,
+            int rtmpPort,
+            int webrtcUdpPort,
+            int rtpPortMin,
+            int rtpPortMax,
+            String hlsStorage,
+            String hlsDirectory,
+            String webrtcPublicIp
+    ) {
         this.httpPort = httpPort;
         this.rtspPort = rtspPort;
         this.rtmpPort = rtmpPort;
@@ -62,6 +89,7 @@ public final class MediaServerConfig {
         this.rtpPortMax = rtpPortMax;
         this.hlsStorage = normalizeHlsStorage(hlsStorage);
         this.hlsDirectory = normalizeHlsDirectory(hlsDirectory);
+        this.webrtcPublicIp = normalizeWebRtcPublicIp(webrtcPublicIp);
     }
 
     public MediaServerConfig(
@@ -92,6 +120,7 @@ public final class MediaServerConfig {
         int rtpMax = parsePort(System.getenv("MEDIA_RTP_PORT_MAX"), DEFAULT_RTP_PORT_MAX);
         String hlsStorage = normalizeHlsStorage(System.getenv("MEDIA_HLS_STORAGE"));
         String hlsDirectory = normalizeHlsDirectory(System.getenv("MEDIA_HLS_DIRECTORY"));
+        String webrtcPublicIp = normalizeWebRtcPublicIp(System.getenv("MEDIA_WEBRTC_PUBLIC_IP"));
         if (rtpMin > rtpMax) {
             int t = rtpMin;
             rtpMin = rtpMax;
@@ -109,7 +138,8 @@ public final class MediaServerConfig {
                 rtpMin,
                 rtpMax,
                 hlsStorage,
-                hlsDirectory
+                hlsDirectory,
+                webrtcPublicIp
         );
     }
 
@@ -160,6 +190,10 @@ public final class MediaServerConfig {
         return hlsDirectory;
     }
 
+    public String webrtcPublicIp() {
+        return webrtcPublicIp;
+    }
+
     public boolean hlsFileStorageEnabled() {
         return "file".equals(hlsStorage);
     }
@@ -184,6 +218,13 @@ public final class MediaServerConfig {
     private static String normalizeHlsDirectory(String raw) {
         if (raw == null || raw.trim().isEmpty()) {
             return DEFAULT_HLS_DIRECTORY;
+        }
+        return raw.trim();
+    }
+
+    private static String normalizeWebRtcPublicIp(String raw) {
+        if (raw == null || raw.trim().isEmpty()) {
+            return MEDIA_WEBRTC_PUBLIC_IP;
         }
         return raw.trim();
     }

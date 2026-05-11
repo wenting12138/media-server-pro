@@ -26,4 +26,21 @@ class MediaServerConfigTest {
         assertEquals("D:/tmp/hls", config.hlsDirectory());
         assertTrue(config.hlsFileStorageEnabled());
     }
+
+    @Test
+    void shouldExposeConfiguredWebRtcPublicIp() {
+        MediaServerConfig config = new MediaServerConfig(
+                18080,
+                1554,
+                11935,
+                18081,
+                20000,
+                30000,
+                "memory",
+                "D:/tmp/hls",
+                "192.168.1.10"
+        );
+
+        assertEquals("192.168.1.10", config.webrtcPublicIp());
+    }
 }
