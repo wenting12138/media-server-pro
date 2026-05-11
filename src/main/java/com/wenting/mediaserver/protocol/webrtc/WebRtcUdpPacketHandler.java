@@ -15,11 +15,17 @@ public final class WebRtcUdpPacketHandler extends SimpleChannelInboundHandler<Da
     private static final Logger log = LoggerFactory.getLogger(WebRtcUdpPacketHandler.class);
 
     private final WebRtcSessionManager sessionManager;
+    private final WebRtcDatagramSender datagramSender;
     private final IceBindingService iceBindingService = new IceBindingService();
     private final StunMessageCodec stunMessageCodec = new StunMessageCodec();
 
     public WebRtcUdpPacketHandler(WebRtcSessionManager sessionManager) {
+        this(sessionManager, null);
+    }
+
+    public WebRtcUdpPacketHandler(WebRtcSessionManager sessionManager, WebRtcDatagramSender datagramSender) {
         this.sessionManager = sessionManager;
+        this.datagramSender = datagramSender;
     }
 
     @Override
@@ -51,7 +57,11 @@ public final class WebRtcUdpPacketHandler extends SimpleChannelInboundHandler<Da
         if (response == null) {
             return;
         }
-        ctx.writeAndFlush(new DatagramPacket(Unpooled.wrappedBuffer(response), packet.sender()));
+        if (datagramSender != null) {
+            datagramSender.send(response, packet.sender());
+        } else {
+            ctx.writeAndFlush(new DatagramPacket(Unpooled.wrappedBuffer(response), packet.sender()));
+        }
     }
 
     private void handleDtlsPacket(ChannelHandlerContext ctx, DatagramPacket packet, byte[] bytes) {
@@ -72,7 +82,11 @@ public final class WebRtcUdpPacketHandler extends SimpleChannelInboundHandler<Da
                     session.dtlsServerTransport().state()
             );
             if (serverHelloFlight.length > 0) {
-                ctx.writeAndFlush(new DatagramPacket(Unpooled.wrappedBuffer(serverHelloFlight), packet.sender()));
+                if (datagramSender != null) {
+                    datagramSender.send(serverHelloFlight, packet.sender());
+                } else {
+                    ctx.writeAndFlush(new DatagramPacket(Unpooled.wrappedBuffer(serverHelloFlight), packet.sender()));
+                }
             }
             return;
         }

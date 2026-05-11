@@ -9,8 +9,11 @@ import com.wenting.mediaserver.protocol.http.HttpRequestHandler;
 import com.wenting.mediaserver.protocol.http.api.ApiResponse;
 import com.wenting.mediaserver.protocol.webrtc.WebRtcOfferParser;
 import com.wenting.mediaserver.protocol.webrtc.WebRtcOfferSummary;
+import com.wenting.mediaserver.protocol.webrtc.WebRtcDatagramSender;
 import com.wenting.mediaserver.protocol.webrtc.WebRtcPeerSession;
 import com.wenting.mediaserver.protocol.webrtc.WebRtcSdpAnswerBuilder;
+import com.wenting.mediaserver.protocol.webrtc.WebRtcSubscriberAdapter;
+import com.wenting.mediaserver.protocol.webrtc.WebRtcSubscriberSession;
 import com.wenting.mediaserver.protocol.webrtc.WebRtcSessionManager;
 import com.wenting.mediaserver.protocol.webrtc.dtls.DtlsServerTransport;
 import com.wenting.mediaserver.protocol.webrtc.dtls.WebRtcCertificateManager;
@@ -47,9 +50,37 @@ public final class WebRtcPlayHandler extends SimpleChannelInboundHandler<FullHtt
     private final WebRtcSdpAnswerBuilder answerBuilder = new WebRtcSdpAnswerBuilder();
     private final int candidatePort;
     private final WebRtcCertificateManager certificateManager;
+    private final WebRtcDatagramSender datagramSender;
 
-    public WebRtcPlayHandler(StreamRegistry streamRegistry, WebRtcSessionManager sessionManager, int candidatePort) {
-        this(streamRegistry, sessionManager, candidatePort, new WebRtcCertificateManager());
+    public WebRtcPlayHandler(
+            StreamRegistry streamRegistry,
+            WebRtcSessionManager sessionManager,
+            int candidatePort
+    ) {
+        this(streamRegistry, sessionManager, candidatePort, null, new WebRtcCertificateManager());
+    }
+
+    public WebRtcPlayHandler(
+            StreamRegistry streamRegistry,
+            WebRtcSessionManager sessionManager,
+            int candidatePort,
+            WebRtcDatagramSender datagramSender
+    ) {
+        this(streamRegistry, sessionManager, candidatePort, datagramSender, new WebRtcCertificateManager());
+    }
+
+    public WebRtcPlayHandler(
+            StreamRegistry streamRegistry,
+            WebRtcSessionManager sessionManager,
+            int candidatePort,
+            WebRtcDatagramSender datagramSender,
+            WebRtcCertificateManager certificateManager
+    ) {
+        this.streamRegistry = streamRegistry;
+        this.sessionManager = sessionManager;
+        this.candidatePort = candidatePort;
+        this.datagramSender = datagramSender;
+        this.certificateManager = certificateManager == null ? new WebRtcCertificateManager() : certificateManager;
     }
 
     public WebRtcPlayHandler(
@@ -58,10 +89,7 @@ public final class WebRtcPlayHandler extends SimpleChannelInboundHandler<FullHtt
             int candidatePort,
             WebRtcCertificateManager certificateManager
     ) {
-        this.streamRegistry = streamRegistry;
-        this.sessionManager = sessionManager;
-        this.candidatePort = candidatePort;
-        this.certificateManager = certificateManager == null ? new WebRtcCertificateManager() : certificateManager;
+        this(streamRegistry, sessionManager, candidatePort, null, certificateManager);
     }
 
     @Override
@@ -139,6 +167,7 @@ public final class WebRtcPlayHandler extends SimpleChannelInboundHandler<FullHtt
         );
         session.dtlsServerTransport(new DtlsServerTransport(sessionId, certificateManager.certificate()));
         sessionManager.register(session);
+        stream.addSubscriber(new WebRtcSubscriberAdapter(new WebRtcSubscriberSession(session, datagramSender)));
         log.info("webrtc offSdp: {}, answerSdp: {}", playRequest.getSdp(), answerSdp);
         Map<String, Object> data = new LinkedHashMap<String, Object>();
         data.put("sessionId", session.sessionId());

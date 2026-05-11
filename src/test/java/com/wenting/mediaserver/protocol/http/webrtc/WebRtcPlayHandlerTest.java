@@ -25,10 +25,8 @@ class WebRtcPlayHandlerTest {
     @Test
     void shouldReturnWebRtcAnswerForExistingPublishedStream() throws Exception {
         StreamRegistry registry = new StreamRegistry();
-        registry.registerPublishedStream(
-                new StreamKey(StreamProtocol.RTMP, "live", "cam01"),
-                new DefaultPublishedStream(new StreamKey(StreamProtocol.RTMP, "live", "cam01"))
-        );
+        DefaultPublishedStream stream = new DefaultPublishedStream(new StreamKey(StreamProtocol.RTMP, "live", "cam01"));
+        registry.registerPublishedStream(new StreamKey(StreamProtocol.RTMP, "live", "cam01"), stream);
         WebRtcSessionManager sessionManager = new WebRtcSessionManager();
         EmbeddedChannel channel = new EmbeddedChannel(new WebRtcPlayHandler(registry, sessionManager, 18081));
 
@@ -46,6 +44,7 @@ class WebRtcPlayHandlerTest {
         assertTrue(answerSdp.contains("a=rtpmap:97 H264/90000"));
         assertTrue(answerSdp.contains("a=candidate:1 1 udp "));
         assertTrue(answerSdp.contains(" 18081 typ host"));
+        assertEquals(1, stream.subscriberCount());
         response.release();
         channel.finishAndReleaseAll();
     }

@@ -16,12 +16,18 @@ public final class WebRtcUdpBootstrap implements IServerBootstrap {
 
     private final MediaServerConfig config;
     private final WebRtcSessionManager sessionManager;
+    private final NettyWebRtcDatagramSender datagramSender;
     private final EventLoopGroup eventLoopGroup = new NioEventLoopGroup(1);
     private Channel udpChannel;
 
-    public WebRtcUdpBootstrap(MediaServerConfig config, WebRtcSessionManager sessionManager) {
+    public WebRtcUdpBootstrap(
+            MediaServerConfig config,
+            WebRtcSessionManager sessionManager,
+            NettyWebRtcDatagramSender datagramSender
+    ) {
         this.config = config;
         this.sessionManager = sessionManager;
+        this.datagramSender = datagramSender == null ? new NettyWebRtcDatagramSender() : datagramSender;
     }
 
     @Override
@@ -29,8 +35,9 @@ public final class WebRtcUdpBootstrap implements IServerBootstrap {
         Bootstrap bootstrap = new Bootstrap();
         bootstrap.group(eventLoopGroup)
                 .channel(NioDatagramChannel.class)
-                .handler(new WebRtcUdpPacketHandler(sessionManager));
+                .handler(new WebRtcUdpPacketHandler(sessionManager, datagramSender));
         this.udpChannel = bootstrap.bind(config.webrtcUdpPort()).sync().channel();
+        datagramSender.channel(udpChannel);
         log.info("WebRTC UDP listening on {}", udpChannel.localAddress());
     }
 
@@ -46,6 +53,7 @@ public final class WebRtcUdpBootstrap implements IServerBootstrap {
         if (udpChannel != null) {
             udpChannel.close();
         }
+        datagramSender.channel(null);
         eventLoopGroup.shutdownGracefully();
     }
 }
