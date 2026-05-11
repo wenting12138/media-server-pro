@@ -94,8 +94,22 @@ class WebRtcUdpPacketHandlerTest {
         assertEquals(remoteAddress, dtlsResponse.recipient());
         assertEquals(22, dtlsResponse.content().getUnsignedByte(0));
         assertEquals(2, dtlsResponse.content().getUnsignedByte(13));
+        assertTrue(containsHandshakeType(io.netty.buffer.ByteBufUtil.getBytes(dtlsResponse.content()), 11));
+        assertTrue(containsHandshakeType(io.netty.buffer.ByteBufUtil.getBytes(dtlsResponse.content()), 14));
         dtlsResponse.release();
         channel.finishAndReleaseAll();
+    }
+
+    private static boolean containsHandshakeType(byte[] bytes, int handshakeType) {
+        if (bytes == null || bytes.length < 14) {
+            return false;
+        }
+        for (int i = 0; i < bytes.length - 13; i++) {
+            if ((bytes[i] & 0xFF) == 22 && (bytes[i + 13] & 0xFF) == handshakeType) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static byte[] bindingRequest(String username) {

@@ -16,6 +16,8 @@ public final class DtlsServerTransport {
     private final WebRtcCertificate certificate;
     private final DtlsClientHelloParser clientHelloParser = new DtlsClientHelloParser();
     private final DtlsServerHelloEncoder serverHelloEncoder = new DtlsServerHelloEncoder();
+    private final DtlsCertificateEncoder certificateEncoder = new DtlsCertificateEncoder();
+    private final DtlsServerHelloDoneEncoder serverHelloDoneEncoder = new DtlsServerHelloDoneEncoder();
     private final SecureRandom secureRandom = new SecureRandom();
 
     private volatile DtlsTransportState state = DtlsTransportState.NEW;
@@ -23,6 +25,7 @@ public final class DtlsServerTransport {
     private volatile byte[] clientRandom = new byte[0];
     private volatile byte[] serverRandom = new byte[0];
     private volatile byte[] lastClientHello = new byte[0];
+    private volatile byte[] handshakeTranscript = new byte[0];
     private volatile byte[] lastServerHelloFlight = new byte[0];
     private volatile SrtpKeyingMaterial srtpKeyingMaterial;
 
@@ -59,6 +62,10 @@ public final class DtlsServerTransport {
         return copy(lastServerHelloFlight);
     }
 
+    public byte[] handshakeTranscript() {
+        return copy(handshakeTranscript);
+    }
+
     public boolean looksLikeClientHello(byte[] packet) {
         return clientHelloParser.looksLikeClientHello(packet);
     }
@@ -77,7 +84,11 @@ public final class DtlsServerTransport {
             this.serverRandom = randomBytes;
         }
         this.state = DtlsTransportState.CLIENT_HELLO_RECEIVED;
-        this.lastServerHelloFlight = serverHelloEncoder.encode(serverRandom);
+        byte[] serverHello = serverHelloEncoder.encode(serverRandom);
+        byte[] certificateMessage = certificateEncoder.encode(certificate);
+        byte[] serverHelloDone = serverHelloDoneEncoder.encode();
+        this.lastServerHelloFlight = concatenate(serverHello, certificateMessage, serverHelloDone);
+        this.handshakeTranscript = concatenate(this.lastClientHello, this.lastServerHelloFlight);
         this.state = DtlsTransportState.SERVER_HELLO_PREPARED;
         this.srtpKeyingMaterial = exportSrtpKeyingMaterial();
         return copy(lastServerHelloFlight);
@@ -119,8 +130,14 @@ public final class DtlsServerTransport {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             digest.update(sessionId.getBytes(StandardCharsets.UTF_8));
             digest.update(certificate.privateKey().getEncoded());
+            digest.update(handshakeTranscript);
             byte[] secret = digest.digest(certificate.certificate().getEncoded());
-            byte[] seed = concatenate(EXPORTER_LABEL.getBytes(StandardCharsets.US_ASCII), clientRandom, serverRandom);
+            byte[] seed = concatenate(
+                    EXPORTER_LABEL.getBytes(StandardCharsets.US_ASCII),
+                    clientRandom,
+                    serverRandom,
+                    handshakeTranscript
+            );
             Mac mac = Mac.getInstance("HmacSHA256");
             mac.init(new SecretKeySpec(secret, "HmacSHA256"));
             byte[] output = new byte[length];
@@ -138,11 +155,20 @@ public final class DtlsServerTransport {
         }
     }
 
-    private static byte[] concatenate(byte[] first, byte[] second, byte[] third) {
-        byte[] bytes = new byte[first.length + second.length + third.length];
-        System.arraycopy(first, 0, bytes, 0, first.length);
-        System.arraycopy(second, 0, bytes, first.length, second.length);
-        System.arraycopy(third, 0, bytes, first.length + second.length, third.length);
+    private static byte[] concatenate(byte[]... parts) {
+        int totalLength = 0;
+        for (byte[] part : parts) {
+            totalLength += part == null ? 0 : part.length;
+        }
+        byte[] bytes = new byte[totalLength];
+        int offset = 0;
+        for (byte[] part : parts) {
+            if (part == null || part.length == 0) {
+                continue;
+            }
+            System.arraycopy(part, 0, bytes, offset, part.length);
+            offset += part.length;
+        }
         return bytes;
     }
 
