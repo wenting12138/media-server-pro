@@ -37,7 +37,30 @@ class DtlsServerTransportTest {
 
         transport.markServerHelloSent();
 
+        assertEquals(DtlsTransportState.SERVER_HELLO_SENT, transport.state());
+    }
+
+    @Test
+    void shouldAdvanceStateAfterClientKeyExchangeChangeCipherSpecAndFinished() {
+        DtlsServerTransport transport = new DtlsServerTransport(
+                "peer-2",
+                new WebRtcCertificateManager().certificate()
+        );
+        transport.handleClientHello(
+                DtlsClientHelloParserTest.sampleClientHello(),
+                new InetSocketAddress("10.0.0.31", 55001)
+        );
+        transport.markServerHelloSent();
+
+        boolean handled = transport.handleClientFlight(
+                DtlsClientFlightParserTest.sampleClientFlight(),
+                new InetSocketAddress("10.0.0.31", 55001)
+        );
+
+        assertTrue(handled);
         assertEquals(DtlsTransportState.SRTP_KEYING_EXPORTED, transport.state());
+        assertTrue(transport.lastClientFlight().length > 0);
+        assertTrue(transport.handshakeTranscript().length > transport.lastServerHelloFlight().length);
     }
 
     private static boolean containsHandshakeType(byte[] bytes, int handshakeType) {

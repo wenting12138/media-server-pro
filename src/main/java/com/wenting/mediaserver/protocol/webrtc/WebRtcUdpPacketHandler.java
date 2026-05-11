@@ -63,21 +63,30 @@ public final class WebRtcUdpPacketHandler extends SimpleChannelInboundHandler<Da
             return;
         }
         byte[] serverHelloFlight = session.dtlsServerTransport().handleClientHello(bytes, packet.sender());
-        if (serverHelloFlight == null) {
-            if (log.isDebugEnabled()) {
-                log.debug("Ignoring non-ClientHello DTLS packet session={} remote={}", session.sessionId(), packet.sender());
+        if (serverHelloFlight != null) {
+            session.dtlsServerTransport().markServerHelloSent();
+            log.info(
+                    "Received DTLS ClientHello session={} remote={} state={}",
+                    session.sessionId(),
+                    packet.sender(),
+                    session.dtlsServerTransport().state()
+            );
+            if (serverHelloFlight.length > 0) {
+                ctx.writeAndFlush(new DatagramPacket(Unpooled.wrappedBuffer(serverHelloFlight), packet.sender()));
             }
             return;
         }
-        session.dtlsServerTransport().markServerHelloSent();
-        log.info(
-                "Received DTLS ClientHello session={} remote={} state={}",
-                session.sessionId(),
-                packet.sender(),
-                session.dtlsServerTransport().state()
-        );
-        if (serverHelloFlight.length > 0) {
-            ctx.writeAndFlush(new DatagramPacket(Unpooled.wrappedBuffer(serverHelloFlight), packet.sender()));
+        if (session.dtlsServerTransport().handleClientFlight(bytes, packet.sender())) {
+            log.info(
+                    "Received DTLS client flight session={} remote={} state={}",
+                    session.sessionId(),
+                    packet.sender(),
+                    session.dtlsServerTransport().state()
+            );
+            return;
+        }
+        if (log.isDebugEnabled()) {
+            log.debug("Ignoring unsupported DTLS packet session={} remote={}", session.sessionId(), packet.sender());
         }
     }
 

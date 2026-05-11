@@ -3,6 +3,7 @@ package com.wenting.mediaserver.protocol.webrtc;
 import com.wenting.mediaserver.core.enums.StreamProtocol;
 import com.wenting.mediaserver.core.model.StreamKey;
 import com.wenting.mediaserver.protocol.webrtc.dtls.DtlsClientHelloParserTest;
+import com.wenting.mediaserver.protocol.webrtc.dtls.DtlsClientFlightParserTest;
 import com.wenting.mediaserver.protocol.webrtc.dtls.DtlsServerTransport;
 import com.wenting.mediaserver.protocol.webrtc.dtls.DtlsTransportState;
 import com.wenting.mediaserver.protocol.webrtc.dtls.WebRtcCertificateManager;
@@ -86,7 +87,7 @@ class WebRtcUdpPacketHandlerTest {
         channel.writeInbound(new DatagramPacket(Unpooled.wrappedBuffer(DtlsClientHelloParserTest.sampleClientHello()), localAddress, remoteAddress));
         DatagramPacket dtlsResponse = channel.readOutbound();
 
-        assertEquals(DtlsTransportState.SRTP_KEYING_EXPORTED, session.dtlsServerTransport().state());
+        assertEquals(DtlsTransportState.SERVER_HELLO_SENT, session.dtlsServerTransport().state());
         assertEquals(remoteAddress, session.dtlsServerTransport().remoteAddress());
         assertNotNull(session.dtlsServerTransport().srtpKeyingMaterial());
         assertTrue(session.dtlsServerTransport().srtpKeyingMaterial().raw().length > 0);
@@ -97,6 +98,11 @@ class WebRtcUdpPacketHandlerTest {
         assertTrue(containsHandshakeType(io.netty.buffer.ByteBufUtil.getBytes(dtlsResponse.content()), 11));
         assertTrue(containsHandshakeType(io.netty.buffer.ByteBufUtil.getBytes(dtlsResponse.content()), 14));
         dtlsResponse.release();
+
+        channel.writeInbound(new DatagramPacket(Unpooled.wrappedBuffer(DtlsClientFlightParserTest.sampleClientFlight()), localAddress, remoteAddress));
+
+        assertEquals(DtlsTransportState.SRTP_KEYING_EXPORTED, session.dtlsServerTransport().state());
+        assertTrue(session.dtlsServerTransport().lastClientFlight().length > 0);
         channel.finishAndReleaseAll();
     }
 

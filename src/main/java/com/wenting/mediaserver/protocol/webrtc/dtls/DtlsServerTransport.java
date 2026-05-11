@@ -15,6 +15,7 @@ public final class DtlsServerTransport {
     private final String sessionId;
     private final WebRtcCertificate certificate;
     private final DtlsClientHelloParser clientHelloParser = new DtlsClientHelloParser();
+    private final DtlsClientFlightParser clientFlightParser = new DtlsClientFlightParser();
     private final DtlsServerHelloEncoder serverHelloEncoder = new DtlsServerHelloEncoder();
     private final DtlsCertificateEncoder certificateEncoder = new DtlsCertificateEncoder();
     private final DtlsServerHelloDoneEncoder serverHelloDoneEncoder = new DtlsServerHelloDoneEncoder();
@@ -25,6 +26,7 @@ public final class DtlsServerTransport {
     private volatile byte[] clientRandom = new byte[0];
     private volatile byte[] serverRandom = new byte[0];
     private volatile byte[] lastClientHello = new byte[0];
+    private volatile byte[] lastClientFlight = new byte[0];
     private volatile byte[] handshakeTranscript = new byte[0];
     private volatile byte[] lastServerHelloFlight = new byte[0];
     private volatile SrtpKeyingMaterial srtpKeyingMaterial;
@@ -60,6 +62,10 @@ public final class DtlsServerTransport {
 
     public byte[] lastServerHelloFlight() {
         return copy(lastServerHelloFlight);
+    }
+
+    public byte[] lastClientFlight() {
+        return copy(lastClientFlight);
     }
 
     public byte[] handshakeTranscript() {
@@ -99,9 +105,33 @@ public final class DtlsServerTransport {
             return;
         }
         this.state = DtlsTransportState.SERVER_HELLO_SENT;
-        if (srtpKeyingMaterial != null && srtpKeyingMaterial.raw().length > 0) {
-            this.state = DtlsTransportState.SRTP_KEYING_EXPORTED;
+    }
+
+    public boolean handleClientFlight(byte[] packet, InetSocketAddress remoteAddress) {
+        DtlsClientFlight clientFlight = clientFlightParser.parse(packet);
+        if (clientFlight == null) {
+            return false;
         }
+        this.remoteAddress = remoteAddress;
+        this.lastClientFlight = clientFlight.packet();
+        this.handshakeTranscript = concatenate(lastClientHello, lastServerHelloFlight, lastClientFlight);
+        if (clientFlight.hasClientKeyExchange()) {
+            this.state = DtlsTransportState.CLIENT_KEY_EXCHANGE_RECEIVED;
+        }
+        if (clientFlight.hasChangeCipherSpec()) {
+            this.state = DtlsTransportState.CHANGE_CIPHER_SPEC_RECEIVED;
+        }
+        if (clientFlight.hasFinished()) {
+            this.state = DtlsTransportState.FINISHED_RECEIVED;
+        }
+        if (clientFlight.isCompleteClientFlight()) {
+            this.state = DtlsTransportState.HANDSHAKE_COMPLETE;
+            this.srtpKeyingMaterial = exportSrtpKeyingMaterial();
+            if (srtpKeyingMaterial != null && srtpKeyingMaterial.raw().length > 0) {
+                this.state = DtlsTransportState.SRTP_KEYING_EXPORTED;
+            }
+        }
+        return true;
     }
 
     public SrtpKeyingMaterial exportSrtpKeyingMaterial() {
