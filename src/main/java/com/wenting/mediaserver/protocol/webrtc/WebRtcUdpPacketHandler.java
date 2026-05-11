@@ -30,9 +30,7 @@ public final class WebRtcUdpPacketHandler extends SimpleChannelInboundHandler<Da
         packet.content().getBytes(packet.content().readerIndex(), bytes);
         StunMessage message = stunMessageCodec.decode(bytes);
         if (message == null) {
-            if (log.isDebugEnabled()) {
-                log.debug("Ignoring non-STUN WebRTC UDP packet from {}", packet.sender());
-            }
+            handleDtlsPacket(packet, bytes);
             return;
         }
         if (message.type() != StunMessageType.BINDING_REQUEST) {
@@ -42,6 +40,7 @@ public final class WebRtcUdpPacketHandler extends SimpleChannelInboundHandler<Da
             return;
         }
         String localUfrag = extractLocalUfrag(message.username());
+        log.info("Received STUN binding request from {} local ufrag={}", packet.sender(), localUfrag);
         WebRtcPeerSession session = sessionManager.findByLocalUfrag(localUfrag);
         if (session == null || session.iceAgent() == null) {
             if (log.isDebugEnabled()) {
@@ -49,11 +48,34 @@ public final class WebRtcUdpPacketHandler extends SimpleChannelInboundHandler<Da
             }
             return;
         }
+        session.remoteAddress(packet.sender());
         byte[] response = iceBindingService.handleBindingRequest(session.iceAgent(), bytes, packet.sender());
         if (response == null) {
             return;
         }
         ctx.writeAndFlush(new DatagramPacket(Unpooled.wrappedBuffer(response), packet.sender()));
+    }
+
+    private void handleDtlsPacket(DatagramPacket packet, byte[] bytes) {
+        WebRtcPeerSession session = sessionManager.findByRemoteAddress(packet.sender());
+        if (session == null || session.dtlsServerTransport() == null) {
+            if (log.isDebugEnabled()) {
+                log.debug("Ignoring non-STUN WebRTC UDP packet from {}", packet.sender());
+            }
+            return;
+        }
+        if (!session.dtlsServerTransport().handleClientHello(bytes, packet.sender())) {
+            if (log.isDebugEnabled()) {
+                log.debug("Ignoring non-ClientHello DTLS packet session={} remote={}", session.sessionId(), packet.sender());
+            }
+            return;
+        }
+        log.info(
+                "Received DTLS ClientHello session={} remote={} state={}",
+                session.sessionId(),
+                packet.sender(),
+                session.dtlsServerTransport().state()
+        );
     }
 
     private String extractLocalUfrag(String username) {

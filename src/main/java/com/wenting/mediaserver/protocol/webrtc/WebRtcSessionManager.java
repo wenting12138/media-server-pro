@@ -1,5 +1,6 @@
 package com.wenting.mediaserver.protocol.webrtc;
 
+import java.net.InetSocketAddress;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -27,6 +28,18 @@ public final class WebRtcSessionManager {
         }
         for (WebRtcPeerSession session : sessionsById.values()) {
             if (session != null && session.iceAgent() != null && localUfrag.equals(session.iceAgent().localUfrag())) {
+                return session;
+            }
+        }
+        return null;
+    }
+
+    public WebRtcPeerSession findByRemoteAddress(InetSocketAddress remoteAddress) {
+        if (remoteAddress == null) {
+            return null;
+        }
+        for (WebRtcPeerSession session : sessionsById.values()) {
+            if (session != null && remoteAddress.equals(session.remoteAddress())) {
                 return session;
             }
         }

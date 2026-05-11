@@ -2,6 +2,10 @@ package com.wenting.mediaserver.protocol.webrtc;
 
 import com.wenting.mediaserver.core.enums.StreamProtocol;
 import com.wenting.mediaserver.core.model.StreamKey;
+import com.wenting.mediaserver.protocol.webrtc.dtls.DtlsClientHelloParserTest;
+import com.wenting.mediaserver.protocol.webrtc.dtls.DtlsServerTransport;
+import com.wenting.mediaserver.protocol.webrtc.dtls.DtlsTransportState;
+import com.wenting.mediaserver.protocol.webrtc.dtls.WebRtcCertificateManager;
 import com.wenting.mediaserver.protocol.webrtc.ice.IceAgent;
 import com.wenting.mediaserver.protocol.webrtc.stun.StunMessage;
 import com.wenting.mediaserver.protocol.webrtc.stun.StunMessageCodec;
@@ -15,6 +19,7 @@ import java.net.InetSocketAddress;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class WebRtcUdpPacketHandlerTest {
 
@@ -43,10 +48,47 @@ class WebRtcUdpPacketHandlerTest {
         DatagramPacket response = channel.readOutbound();
         assertNotNull(response);
         assertEquals(remoteAddress, response.recipient());
+        assertEquals(remoteAddress, sessionManager.find("peer-1").remoteAddress());
         StunMessage message = new StunMessageCodec().decode(io.netty.buffer.ByteBufUtil.getBytes(response.content()));
         assertNotNull(message);
         assertEquals(StunMessageType.BINDING_SUCCESS_RESPONSE, message.type());
         response.release();
+        channel.finishAndReleaseAll();
+    }
+
+    @Test
+    void shouldAcceptDtlsClientHelloAfterIceBinding() {
+        WebRtcSessionManager sessionManager = new WebRtcSessionManager();
+        IceAgent iceAgent = new IceAgent("localufrag", "localpwd");
+        iceAgent.addHostCandidate("127.0.0.1", 18081);
+        WebRtcPeerSession session = new WebRtcPeerSession(
+                "peer-2",
+                new StreamKey(StreamProtocol.RTMP, "live", "cam02"),
+                "offer",
+                "answer",
+                "localufrag",
+                "localpwd",
+                "AA:BB",
+                iceAgent,
+                System.currentTimeMillis()
+        );
+        session.dtlsServerTransport(new DtlsServerTransport(session.sessionId(), new WebRtcCertificateManager().certificate()));
+        sessionManager.register(session);
+        EmbeddedChannel channel = new EmbeddedChannel(new WebRtcUdpPacketHandler(sessionManager));
+
+        InetSocketAddress localAddress = new InetSocketAddress("127.0.0.1", 18081);
+        InetSocketAddress remoteAddress = new InetSocketAddress("10.0.0.21", 50002);
+        channel.writeInbound(new DatagramPacket(Unpooled.wrappedBuffer(bindingRequest("remote:localufrag")), localAddress, remoteAddress));
+        DatagramPacket stunResponse = channel.readOutbound();
+        assertNotNull(stunResponse);
+        stunResponse.release();
+
+        channel.writeInbound(new DatagramPacket(Unpooled.wrappedBuffer(DtlsClientHelloParserTest.sampleClientHello()), localAddress, remoteAddress));
+
+        assertEquals(DtlsTransportState.SRTP_KEYING_EXPORTED, session.dtlsServerTransport().state());
+        assertEquals(remoteAddress, session.dtlsServerTransport().remoteAddress());
+        assertNotNull(session.dtlsServerTransport().srtpKeyingMaterial());
+        assertTrue(session.dtlsServerTransport().srtpKeyingMaterial().raw().length > 0);
         channel.finishAndReleaseAll();
     }
 

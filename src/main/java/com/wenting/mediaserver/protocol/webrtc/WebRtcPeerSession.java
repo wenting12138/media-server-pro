@@ -1,7 +1,10 @@
 package com.wenting.mediaserver.protocol.webrtc;
 
 import com.wenting.mediaserver.core.model.StreamKey;
+import com.wenting.mediaserver.protocol.webrtc.dtls.DtlsServerTransport;
 import com.wenting.mediaserver.protocol.webrtc.ice.IceAgent;
+
+import java.net.InetSocketAddress;
 
 public final class WebRtcPeerSession {
 
@@ -14,6 +17,8 @@ public final class WebRtcPeerSession {
     private final String fingerprint;
     private final IceAgent iceAgent;
     private final long createdAtMillis;
+    private volatile InetSocketAddress remoteAddress;
+    private volatile DtlsServerTransport dtlsServerTransport;
 
     public WebRtcPeerSession(
             String sessionId,
@@ -71,5 +76,21 @@ public final class WebRtcPeerSession {
 
     public long createdAtMillis() {
         return createdAtMillis;
+    }
+
+    public InetSocketAddress remoteAddress() {
+        return remoteAddress;
+    }
+
+    public void remoteAddress(InetSocketAddress remoteAddress) {
+        this.remoteAddress = remoteAddress;
+    }
+
+    public DtlsServerTransport dtlsServerTransport() {
+        return dtlsServerTransport;
+    }
+
+    public void dtlsServerTransport(DtlsServerTransport dtlsServerTransport) {
+        this.dtlsServerTransport = dtlsServerTransport;
     }
 }

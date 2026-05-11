@@ -57,7 +57,7 @@ public class RtspBootstrap implements IServerBootstrap {
                 ));
         this.rtspChannel = rtsp.bind(config.rtspPort()).sync().channel();
         log.info("RTSP (TCP signaling + RTP TCP/UDP) listening on {}", rtspChannel.localAddress());
-        startTrafficLogTask();
+//        startTrafficLogTask();
     }
 
     @Override

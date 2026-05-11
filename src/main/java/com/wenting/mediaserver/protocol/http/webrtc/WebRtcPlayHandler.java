@@ -12,6 +12,8 @@ import com.wenting.mediaserver.protocol.webrtc.WebRtcOfferSummary;
 import com.wenting.mediaserver.protocol.webrtc.WebRtcPeerSession;
 import com.wenting.mediaserver.protocol.webrtc.WebRtcSdpAnswerBuilder;
 import com.wenting.mediaserver.protocol.webrtc.WebRtcSessionManager;
+import com.wenting.mediaserver.protocol.webrtc.dtls.DtlsServerTransport;
+import com.wenting.mediaserver.protocol.webrtc.dtls.WebRtcCertificateManager;
 import com.wenting.mediaserver.protocol.webrtc.ice.IceAgent;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandlerContext;
@@ -23,6 +25,8 @@ import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.http.HttpVersion;
 import io.netty.util.CharsetUtil;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.net.InetSocketAddress;
 import java.security.SecureRandom;
@@ -34,6 +38,7 @@ public final class WebRtcPlayHandler extends SimpleChannelInboundHandler<FullHtt
 
     private static final String WEBRTC_PLAY_PATH = "/webrtc/play";
     private static final SecureRandom RANDOM = new SecureRandom();
+    private static final Logger log = LoggerFactory.getLogger(WebRtcPlayHandler.class);
 
     private final StreamRegistry streamRegistry;
     private final WebRtcSessionManager sessionManager;
@@ -41,11 +46,22 @@ public final class WebRtcPlayHandler extends SimpleChannelInboundHandler<FullHtt
     private final WebRtcOfferParser offerParser = new WebRtcOfferParser();
     private final WebRtcSdpAnswerBuilder answerBuilder = new WebRtcSdpAnswerBuilder();
     private final int candidatePort;
+    private final WebRtcCertificateManager certificateManager;
 
     public WebRtcPlayHandler(StreamRegistry streamRegistry, WebRtcSessionManager sessionManager, int candidatePort) {
+        this(streamRegistry, sessionManager, candidatePort, new WebRtcCertificateManager());
+    }
+
+    public WebRtcPlayHandler(
+            StreamRegistry streamRegistry,
+            WebRtcSessionManager sessionManager,
+            int candidatePort,
+            WebRtcCertificateManager certificateManager
+    ) {
         this.streamRegistry = streamRegistry;
         this.sessionManager = sessionManager;
         this.candidatePort = candidatePort;
+        this.certificateManager = certificateManager == null ? new WebRtcCertificateManager() : certificateManager;
     }
 
     @Override
@@ -91,7 +107,7 @@ public final class WebRtcPlayHandler extends SimpleChannelInboundHandler<FullHtt
         String sessionId = UUID.randomUUID().toString();
         String iceUfrag = randomToken(8);
         String icePwd = randomToken(24);
-        String fingerprint = randomFingerprint();
+        String fingerprint = certificateManager.certificate().fingerprintSha256();
         StreamProtocol sourceProtocol = stream.getProtocol() == null ? StreamProtocol.UNKNOWN : stream.getProtocol();
         StreamKey targetStreamKey = new StreamKey(sourceProtocol, playRequest.getApp().trim(), playRequest.getStream().trim());
         String candidateIp = resolveCandidateIp(ctx);
@@ -121,7 +137,9 @@ public final class WebRtcPlayHandler extends SimpleChannelInboundHandler<FullHtt
                 iceAgent,
                 provisional.createdAtMillis()
         );
+        session.dtlsServerTransport(new DtlsServerTransport(sessionId, certificateManager.certificate()));
         sessionManager.register(session);
+        log.info("webrtc offSdp: {}, answerSdp: {}", playRequest.getSdp(), answerSdp);
         Map<String, Object> data = new LinkedHashMap<String, Object>();
         data.put("sessionId", session.sessionId());
         data.put("app", playRequest.getApp().trim());
@@ -187,23 +205,6 @@ public final class WebRtcPlayHandler extends SimpleChannelInboundHandler<FullHtt
         StringBuilder builder = new StringBuilder(length);
         for (int i = 0; i < length; i++) {
             builder.append(alphabet.charAt(RANDOM.nextInt(alphabet.length())));
-        }
-        return builder.toString();
-    }
-
-    private static String randomFingerprint() {
-        byte[] bytes = new byte[32];
-        RANDOM.nextBytes(bytes);
-        StringBuilder builder = new StringBuilder(bytes.length * 3 - 1);
-        for (int i = 0; i < bytes.length; i++) {
-            if (i > 0) {
-                builder.append(':');
-            }
-            int value = bytes[i] & 0xFF;
-            if (value < 0x10) {
-                builder.append('0');
-            }
-            builder.append(Integer.toHexString(value).toUpperCase(java.util.Locale.ROOT));
         }
         return builder.toString();
     }
