@@ -1,8 +1,11 @@
 package com.wenting.mediaserver.protocol.webrtc.stun;
 
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 import java.io.ByteArrayOutputStream;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.util.zip.CRC32;
 
 public final class StunMessageCodec {
 
@@ -60,17 +63,57 @@ public final class StunMessageCodec {
     }
 
     public byte[] encodeBindingSuccessResponse(byte[] transactionId, InetSocketAddress mappedAddress) {
-        byte[] xorMapped = encodeXorMappedAddress(mappedAddress);
-        ByteArrayOutputStream attributes = new ByteArrayOutputStream();
-        writeAttribute(attributes, StunAttributeType.XOR_MAPPED_ADDRESS.code(), xorMapped);
-        byte[] attributeBytes = attributes.toByteArray();
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        writeUnsignedShort(out, StunMessageType.BINDING_SUCCESS_RESPONSE.code());
-        writeUnsignedShort(out, attributeBytes.length);
-        writeInt(out, MAGIC_COOKIE);
-        out.write(transactionId, 0, transactionId.length);
-        out.write(attributeBytes, 0, attributeBytes.length);
-        return out.toByteArray();
+        return encodeBindingSuccessResponse(transactionId, mappedAddress, null);
+    }
+
+    public byte[] encodeBindingSuccessResponse(byte[] transactionId, InetSocketAddress mappedAddress, String localIcePwd) {
+        byte[] xorMappedValue = encodeXorMappedAddress(mappedAddress);
+        byte[] xaddrAttr = encodeAttribute(StunAttributeType.XOR_MAPPED_ADDRESS.code(), xorMappedValue);
+
+        // Build partial response with message length that includes MESSAGE-INTEGRITY
+        int miAttrTotal = 4 + 20; // attribute header + HMAC-SHA1
+        int partialBodyLength = xaddrAttr.length + miAttrTotal;
+
+        ByteArrayOutputStream partial = new ByteArrayOutputStream();
+        writeUnsignedShort(partial, StunMessageType.BINDING_SUCCESS_RESPONSE.code());
+        writeUnsignedShort(partial, partialBodyLength);
+        writeInt(partial, MAGIC_COOKIE);
+        partial.write(transactionId, 0, transactionId.length);
+        partial.write(xaddrAttr, 0, xaddrAttr.length);
+
+        byte[] partialBytes = partial.toByteArray();
+
+        // Compute and append MESSAGE-INTEGRITY (HMAC-SHA1 with local ICE password)
+        if (localIcePwd != null && !localIcePwd.isEmpty()) {
+            byte[] hmac = hmacSha1(partialBytes, localIcePwd);
+            byte[] miAttr = encodeAttribute(StunAttributeType.MESSAGE_INTEGRITY.code(), hmac);
+            partial.write(miAttr, 0, miAttr.length);
+
+            // Update message length to also include FINGERPRINT
+            int fpAttrTotal = 4 + 4; // attribute header + CRC32
+            int finalBodyLength = partialBodyLength + fpAttrTotal;
+
+            byte[] withMi = partial.toByteArray();
+            withMi[2] = (byte) ((finalBodyLength >> 8) & 0xFF);
+            withMi[3] = (byte) (finalBodyLength & 0xFF);
+
+            // Compute and append FINGERPRINT (CRC32 XOR 0x5354554E)
+            long crc = crc32(withMi) ^ 0x5354554EL;
+            byte[] fpValue = new byte[] {
+                    (byte) ((crc >> 24) & 0xFF),
+                    (byte) ((crc >> 16) & 0xFF),
+                    (byte) ((crc >> 8) & 0xFF),
+                    (byte) (crc & 0xFF)
+            };
+
+            ByteArrayOutputStream finalOut = new ByteArrayOutputStream();
+            finalOut.write(withMi, 0, withMi.length);
+            byte[] fpAttr = encodeAttribute(StunAttributeType.FINGERPRINT.code(), fpValue);
+            finalOut.write(fpAttr, 0, fpAttr.length);
+            return finalOut.toByteArray();
+        }
+
+        return partialBytes;
     }
 
     private static InetSocketAddress decodeXorMappedAddress(byte[] bytes, int offset, int length) {
@@ -115,15 +158,32 @@ public final class StunMessageCodec {
         return value;
     }
 
-    private static void writeAttribute(ByteArrayOutputStream out, int type, byte[] value) {
+    private static byte[] encodeAttribute(int type, byte[] value) {
         byte[] safeValue = value == null ? new byte[0] : value;
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
         writeUnsignedShort(out, type);
         writeUnsignedShort(out, safeValue.length);
         out.write(safeValue, 0, safeValue.length);
-        int padding = paddedLength(safeValue.length) - safeValue.length;
-        for (int i = 0; i < padding; i++) {
+        for (int i = paddedLength(safeValue.length) - safeValue.length; i > 0; i--) {
             out.write(0x00);
         }
+        return out.toByteArray();
+    }
+
+    private static byte[] hmacSha1(byte[] data, String key) {
+        try {
+            Mac mac = Mac.getInstance("HmacSHA1");
+            mac.init(new SecretKeySpec(key.getBytes(java.nio.charset.StandardCharsets.UTF_8), "HmacSHA1"));
+            return mac.doFinal(data);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to compute STUN MESSAGE-INTEGRITY", e);
+        }
+    }
+
+    private static long crc32(byte[] data) {
+        CRC32 crc = new CRC32();
+        crc.update(data);
+        return crc.getValue();
     }
 
     private static int paddedLength(int length) {

@@ -28,6 +28,7 @@ public final class WebRtcSdpAnswerBuilder {
         sdp.append("a=ice-pwd:").append(session.icePwd()).append("\r\n");
         sdp.append("a=fingerprint:sha-256 ").append(session.fingerprint()).append("\r\n");
         sdp.append("a=setup:passive\r\n");
+        sdp.append("a=ice-lite\r\n");
         sdp.append("a=rtpmap:").append(offerSummary.h264PayloadType().intValue()).append(" H264/90000\r\n");
         sdp.append("a=fmtp:").append(offerSummary.h264PayloadType().intValue()).append(" packetization-mode=1;profile-level-id=42e01f;level-asymmetry-allowed=1\r\n");
         sdp.append("a=ssrc:1001 cname:media-server\r\n");

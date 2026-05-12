@@ -38,8 +38,8 @@ public final class WebRtcUdpPacketHandler extends SimpleChannelInboundHandler<Da
             return;
         }
         if (message.type() != StunMessageType.BINDING_REQUEST) {
-            if (log.isDebugEnabled()) {
-                log.debug("Ignoring unsupported STUN message type {} from {}", message.type(), packet.sender());
+            if (log.isInfoEnabled()) {
+                log.info("Ignoring unsupported STUN message type {} from {}", message.type(), packet.sender());
             }
             return;
         }
@@ -47,16 +47,18 @@ public final class WebRtcUdpPacketHandler extends SimpleChannelInboundHandler<Da
         log.info("Received STUN binding request from {} local ufrag={}", packet.sender(), localUfrag);
         WebRtcPeerSession session = sessionManager.findByLocalUfrag(localUfrag);
         if (session == null || session.iceAgent() == null) {
-            if (log.isDebugEnabled()) {
-                log.debug("No WebRTC session for local ufrag={} remote={}", localUfrag, packet.sender());
-            }
+            log.warn("No WebRTC session for local ufrag={} remote={}", localUfrag, packet.sender());
             return;
         }
         session.remoteAddress(packet.sender());
         byte[] response = iceBindingService.handleBindingRequest(session.iceAgent(), bytes, packet.sender());
         if (response == null) {
+            log.warn("ICE binding request produced no response session={} ufrag={} remote={}",
+                    session.sessionId(), localUfrag, packet.sender());
             return;
         }
+        log.info("Sending STUN binding success response session={} remote={} size={}",
+                session.sessionId(), packet.sender(), response.length);
         if (datagramSender != null) {
             datagramSender.send(response, packet.sender());
         } else {
@@ -67,8 +69,8 @@ public final class WebRtcUdpPacketHandler extends SimpleChannelInboundHandler<Da
     private void handleDtlsPacket(ChannelHandlerContext ctx, DatagramPacket packet, byte[] bytes) {
         WebRtcPeerSession session = sessionManager.findByRemoteAddress(packet.sender());
         if (session == null || session.dtlsServerTransport() == null) {
-            if (log.isDebugEnabled()) {
-                log.debug("Ignoring non-STUN WebRTC UDP packet from {}", packet.sender());
+            if (log.isInfoEnabled()) {
+                log.info("Ignoring non-STUN WebRTC UDP packet from {}", packet.sender());
             }
             return;
         }
@@ -99,8 +101,8 @@ public final class WebRtcUdpPacketHandler extends SimpleChannelInboundHandler<Da
             );
             return;
         }
-        if (log.isDebugEnabled()) {
-            log.debug("Ignoring unsupported DTLS packet session={} remote={}", session.sessionId(), packet.sender());
+        if (log.isInfoEnabled()) {
+            log.info("Ignoring unsupported DTLS packet session={} remote={}", session.sessionId(), packet.sender());
         }
     }
 
@@ -109,9 +111,11 @@ public final class WebRtcUdpPacketHandler extends SimpleChannelInboundHandler<Da
             return null;
         }
         String normalized = username.trim();
-        int separatorIndex = normalized.lastIndexOf(':');
-        return separatorIndex >= 0 && separatorIndex < normalized.length() - 1
-                ? normalized.substring(separatorIndex + 1)
+        int separatorIndex = normalized.indexOf(':');
+        // RFC 5245/8445: USERNAME = remote_ufrag:local_ufrag, where remote_ufrag is the
+        // receiving peer's ufrag (this server) and local_ufrag is the sender's ufrag (browser)
+        return separatorIndex > 0
+                ? normalized.substring(0, separatorIndex)
                 : normalized;
     }
 }

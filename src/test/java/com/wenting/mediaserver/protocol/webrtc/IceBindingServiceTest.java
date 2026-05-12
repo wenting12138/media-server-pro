@@ -20,7 +20,7 @@ class IceBindingServiceTest {
         IceAgent iceAgent = new IceAgent("localufrag", "localpwd");
         iceAgent.addHostCandidate("127.0.0.1", 18080);
 
-        assertTrue(iceAgent.acceptsRemoteUsername("remote:localufrag"));
+        assertTrue(iceAgent.acceptsRemoteUsername("localufrag:remote"));
         assertTrue(iceAgent.defaultCandidate() != null);
         assertEquals("127.0.0.1", iceAgent.defaultCandidate().address());
     }
@@ -28,7 +28,7 @@ class IceBindingServiceTest {
     @Test
     void shouldReturnBindingSuccessResponseForValidBindingRequest() {
         IceAgent iceAgent = new IceAgent("localufrag", "localpwd");
-        byte[] packet = bindingRequest("remote:localufrag");
+        byte[] packet = bindingRequest("localufrag:remote");
 
         byte[] response = new IceBindingService().handleBindingRequest(
                 iceAgent,
@@ -49,7 +49,7 @@ class IceBindingServiceTest {
 
         byte[] response = new IceBindingService().handleBindingRequest(
                 iceAgent,
-                bindingRequest("remote:otherufrag"),
+                bindingRequest("otherufrag:remote"),
                 new InetSocketAddress("10.0.0.20", 50000)
         );
 

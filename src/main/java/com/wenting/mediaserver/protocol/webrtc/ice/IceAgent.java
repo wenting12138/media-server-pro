@@ -47,7 +47,9 @@ public final class IceAgent {
         if (username == null || username.trim().isEmpty()) {
             return false;
         }
+        // RFC 5245/8445: USERNAME = remote_ufrag:local_ufrag, where remote_ufrag
+        // is the receiving peer's (server's) ufrag, and local_ufrag is the sender's (browser's)
         String normalized = username.trim();
-        return normalized.endsWith(":" + localUfrag) || normalized.equals(localUfrag);
+        return normalized.equals(localUfrag) || normalized.startsWith(localUfrag + ":");
     }
 }

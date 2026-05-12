@@ -44,7 +44,7 @@ class WebRtcUdpPacketHandlerTest {
 
         InetSocketAddress localAddress = new InetSocketAddress("127.0.0.1", 18081);
         InetSocketAddress remoteAddress = new InetSocketAddress("10.0.0.20", 50000);
-        channel.writeInbound(new DatagramPacket(Unpooled.wrappedBuffer(bindingRequest("remote:localufrag")), localAddress, remoteAddress));
+        channel.writeInbound(new DatagramPacket(Unpooled.wrappedBuffer(bindingRequest("localufrag:remote")), localAddress, remoteAddress));
 
         DatagramPacket response = channel.readOutbound();
         assertNotNull(response);
@@ -79,7 +79,7 @@ class WebRtcUdpPacketHandlerTest {
 
         InetSocketAddress localAddress = new InetSocketAddress("127.0.0.1", 18081);
         InetSocketAddress remoteAddress = new InetSocketAddress("10.0.0.21", 50002);
-        channel.writeInbound(new DatagramPacket(Unpooled.wrappedBuffer(bindingRequest("remote:localufrag")), localAddress, remoteAddress));
+        channel.writeInbound(new DatagramPacket(Unpooled.wrappedBuffer(bindingRequest("localufrag:remote")), localAddress, remoteAddress));
         DatagramPacket stunResponse = channel.readOutbound();
         assertNotNull(stunResponse);
         stunResponse.release();

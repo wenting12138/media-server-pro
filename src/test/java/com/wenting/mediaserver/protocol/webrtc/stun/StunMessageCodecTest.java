@@ -30,7 +30,7 @@ class StunMessageCodecTest {
         byte[] transactionId = new byte[] {0x63, 0x41, 0x11, 0x22, 0x01, 0x02, 0x03, 0x04, 0x33, 0x44, 0x55, 0x66};
         InetSocketAddress mappedAddress = new InetSocketAddress("192.168.1.10", 54321);
 
-        byte[] response = new StunMessageCodec().encodeBindingSuccessResponse(transactionId, mappedAddress);
+        byte[] response = new StunMessageCodec().encodeBindingSuccessResponse(transactionId, mappedAddress, "testIcePwd");
         StunMessage message = new StunMessageCodec().decode(response);
 
         assertNotNull(message);
@@ -38,6 +38,25 @@ class StunMessageCodecTest {
         assertNotNull(message.xorMappedAddress());
         assertEquals("192.168.1.10", message.xorMappedAddress().getAddress().getHostAddress());
         assertEquals(54321, message.xorMappedAddress().getPort());
+        // Response should contain MESSAGE-INTEGRITY (24 bytes) and FINGERPRINT (8 bytes) beyond basic attributes
+        assertTrue(response.length > 20 + 12);
+    }
+
+    @Test
+    void shouldEncodeBindingSuccessResponseWithMessageIntegrityAndFingerprint() {
+        byte[] transactionId = new byte[] {0x63, 0x41, 0x11, 0x22, 0x01, 0x02, 0x03, 0x04, 0x33, 0x44, 0x55, 0x66};
+        InetSocketAddress mappedAddress = new InetSocketAddress("192.168.1.10", 54321);
+
+        // Without password: no MI/FP
+        byte[] withoutPwd = new StunMessageCodec().encodeBindingSuccessResponse(transactionId, mappedAddress);
+        // With password: includes MI/FP
+        byte[] withPwd = new StunMessageCodec().encodeBindingSuccessResponse(transactionId, mappedAddress, "testIcePwd");
+
+        assertTrue(withPwd.length > withoutPwd.length);
+        StunMessage message = new StunMessageCodec().decode(withPwd);
+        assertNotNull(message);
+        assertEquals(StunMessageType.BINDING_SUCCESS_RESPONSE, message.type());
+        assertNotNull(message.xorMappedAddress());
     }
 
     private static byte[] bindingRequest(byte[] transactionId, String username, long priority, boolean useCandidate) {
