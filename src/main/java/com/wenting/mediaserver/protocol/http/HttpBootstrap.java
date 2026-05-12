@@ -1,7 +1,6 @@
 package com.wenting.mediaserver.protocol.http;
 
 import com.wenting.mediaserver.protocol.http.api.HttpJsonApiHandler;
-import com.wenting.mediaserver.protocol.http.webrtc.WebRtcPlayHandler;
 import com.wenting.mediaserver.protocol.http.webrtc.WebRtcTestPageHandler;
 import com.wenting.mediaserver.bootstrap.IServerBootstrap;
 import com.wenting.mediaserver.config.MediaServerConfig;
@@ -9,8 +8,6 @@ import com.wenting.mediaserver.core.registry.StreamRegistry;
 import com.wenting.mediaserver.protocol.http.flv.HttpFlvHandler;
 import com.wenting.mediaserver.protocol.http.hls.HlsHandler;
 import com.wenting.mediaserver.protocol.http.hls.HlsSessionManager;
-import com.wenting.mediaserver.protocol.webrtc.WebRtcDatagramSender;
-import com.wenting.mediaserver.protocol.webrtc.WebRtcSessionManager;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelInitializer;
@@ -36,23 +33,17 @@ public class HttpBootstrap implements IServerBootstrap {
     private final MediaServerConfig config;
     private final StreamRegistry registry;
     private final HlsSessionManager hlsSessionManager;
-    private final WebRtcSessionManager webRtcSessionManager;
-    private final WebRtcDatagramSender webRtcDatagramSender;
     private Channel httpChannel;
 
     public HttpBootstrap(
             MediaServerConfig config,
-            StreamRegistry registry,
-            WebRtcSessionManager webRtcSessionManager,
-            WebRtcDatagramSender webRtcDatagramSender
+            StreamRegistry registry
     ) {
         this.config = config;
         this.registry = registry;
         this.hlsSessionManager = config.hlsFileStorageEnabled()
                 ? new HlsSessionManager(registry, Paths.get(config.hlsDirectory()))
                 : new HlsSessionManager(registry);
-        this.webRtcSessionManager = webRtcSessionManager == null ? new WebRtcSessionManager() : webRtcSessionManager;
-        this.webRtcDatagramSender = webRtcDatagramSender;
     }
 
     @Override
@@ -71,13 +62,6 @@ public class HttpBootstrap implements IServerBootstrap {
                                 new WebRtcTestPageHandler(),
                                 new HlsHandler(registry, hlsSessionManager),
                                 new HttpFlvHandler(registry),
-                                new WebRtcPlayHandler(
-                                        registry,
-                                        webRtcSessionManager,
-                                        config.webrtcUdpPort(),
-                                        config.webrtcPublicIp(),
-                                        webRtcDatagramSender
-                                ),
                                 new HttpJsonApiHandler(config)
                         ));
                     }
