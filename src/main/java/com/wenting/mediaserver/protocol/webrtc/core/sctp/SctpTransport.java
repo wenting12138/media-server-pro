@@ -1,6 +1,8 @@
 package com.wenting.mediaserver.protocol.webrtc.core.sctp;
 
 import org.bouncycastle.tls.DTLSTransport;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.List;
@@ -9,7 +11,6 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
-import java.util.logging.Logger;
 
 /**
  * SCTP over DTLS transport bridge.
@@ -20,7 +21,7 @@ import java.util.logging.Logger;
  * - 定时重传未确认的 DATA chunk
  */
 public class SctpTransport implements AutoCloseable {
-    private static final Logger LOG = Logger.getLogger(SctpTransport.class.getName());
+    private static final Logger LOG = LoggerFactory.getLogger(SctpTransport.class);
 
     private static final int SCTP_PORT = 5000;
     private static final long RETRANSMIT_INTERVAL_MS = 500;
@@ -71,7 +72,7 @@ public class SctpTransport implements AutoCloseable {
                     dtlsTransport.send(pkt, 0, pkt.length);
                 }
             } catch (IOException e) {
-                LOG.log(Level.WARNING, "Failed to send SCTP INIT", e);
+                LOG.error("Failed to send SCTP INIT", e);
             }
         }
     }
@@ -122,7 +123,7 @@ public class SctpTransport implements AutoCloseable {
                 }
             } catch (IOException e) {
                 if (!closed) {
-                    LOG.log(Level.FINE, "SCTP receive error", e);
+                    LOG.error("SCTP receive error", e);
                 }
             }
         }
@@ -137,7 +138,7 @@ public class SctpTransport implements AutoCloseable {
                 dtlsTransport.send(pkt, 0, pkt.length);
             }
         } catch (IOException e) {
-            LOG.log(Level.FINE, "SCTP retransmit error", e);
+            LOG.error("SCTP retransmit error", e);
         }
     }
 }

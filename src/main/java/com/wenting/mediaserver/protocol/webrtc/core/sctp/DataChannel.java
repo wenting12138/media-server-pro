@@ -1,11 +1,14 @@
 package com.wenting.mediaserver.protocol.webrtc.core.sctp;
 
+import com.wenting.mediaserver.protocol.webrtc.core.ice.IceAgent;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Level;
-import java.util.logging.Logger;
 
 import static com.wenting.mediaserver.protocol.webrtc.core.sctp.SctpConstants.*;
 
@@ -15,7 +18,7 @@ import static com.wenting.mediaserver.protocol.webrtc.core.sctp.SctpConstants.*;
  * 每个 DataChannel 对应一个 SCTP stream。支持 String 和 Binary 数据传输。
  */
 public class DataChannel {
-    private static final Logger LOG = Logger.getLogger(DataChannel.class.getName());
+    private static final Logger LOG = LoggerFactory.getLogger(DataChannel.class);
 
     public enum State { CONNECTING, OPEN, CLOSING, CLOSED }
 

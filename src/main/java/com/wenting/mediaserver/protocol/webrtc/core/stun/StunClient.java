@@ -1,7 +1,10 @@
 package com.wenting.mediaserver.protocol.webrtc.core.stun;
 
 
+import com.wenting.mediaserver.protocol.webrtc.core.sctp.SctpTransport;
 import com.wenting.mediaserver.protocol.webrtc.transport.UdpTransport;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -11,7 +14,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.logging.Logger;
 
 /**
  * STUN client that sends Binding Requests and handles responses.
@@ -23,7 +25,7 @@ import java.util.logging.Logger;
  *             System.out.println("公网地址: " + addr));
  */
 public class StunClient {
-    private static final Logger LOG = Logger.getLogger(StunClient.class.getName());
+    private static final Logger LOG = LoggerFactory.getLogger(StunClient.class);
 
     private static final long DEFAULT_TIMEOUT_MS = 5000;
 

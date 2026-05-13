@@ -1,5 +1,6 @@
 package com.wenting.mediaserver.protocol.webrtc.transport;
 
+import com.wenting.mediaserver.protocol.webrtc.core.stun.StunClient;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
@@ -9,6 +10,8 @@ import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.DatagramPacket;
 import io.netty.channel.socket.nio.NioDatagramChannel;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.net.InetSocketAddress;
 import java.util.concurrent.CompletableFuture;
@@ -17,7 +20,6 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
-import java.util.logging.Logger;
 
 /**
  * Netty-backed UDP transport.
@@ -29,7 +31,7 @@ import java.util.logging.Logger;
  * 接收: SimpleChannelInboundHandler<DatagramPacket> 处理入站包
  */
 public class UdpTransport implements DatagramIo {
-    private static final Logger LOG = Logger.getLogger(UdpTransport.class.getName());
+    private static final Logger LOG = LoggerFactory.getLogger(UdpTransport.class);
 
     private final EventLoopGroup group;
     private final Bootstrap bootstrap;
@@ -160,7 +162,7 @@ public class UdpTransport implements DatagramIo {
 
         @Override
         public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-            LOG.log(Level.WARNING, "UDP handler error", cause);
+            LOG.error("UDP handler error", cause);
         }
     }
 

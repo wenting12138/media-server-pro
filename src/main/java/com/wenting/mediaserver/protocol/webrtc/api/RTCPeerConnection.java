@@ -1,5 +1,6 @@
 package com.wenting.mediaserver.protocol.webrtc.api;
 
+import com.wenting.mediaserver.protocol.webrtc.WebRtcUdpBootstrap;
 import com.wenting.mediaserver.protocol.webrtc.core.dtls.DtlsHandshake;
 import com.wenting.mediaserver.protocol.webrtc.core.dtls.UdpDatagramTransport;
 import com.wenting.mediaserver.protocol.webrtc.core.ice.*;
@@ -17,6 +18,8 @@ import com.wenting.mediaserver.protocol.webrtc.core.srtp.SrtpTransform;
 import com.wenting.mediaserver.protocol.webrtc.core.stun.StunMessage;
 import com.wenting.mediaserver.protocol.webrtc.transport.DatagramIo;
 import com.wenting.mediaserver.protocol.webrtc.transport.UdpTransport;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -27,7 +30,6 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
-import java.util.logging.Logger;
 
 import static com.wenting.mediaserver.protocol.webrtc.core.sctp.SctpConstants.*;
 
@@ -48,7 +50,7 @@ import static com.wenting.mediaserver.protocol.webrtc.core.sctp.SctpConstants.*;
  */
 public class RTCPeerConnection implements AutoCloseable {
 
-    private static final Logger LOG = Logger.getLogger(RTCPeerConnection.class.getName());
+    private static final Logger LOG = LoggerFactory.getLogger(RTCPeerConnection.class);
 
     // ---- JS-compatible state enums ----
     public enum SignalingState { STABLE, HAVE_LOCAL_OFFER, HAVE_REMOTE_OFFER, CLOSED }
@@ -451,7 +453,7 @@ public class RTCPeerConnection implements AutoCloseable {
         InetSocketAddress addr = remoteAddress;
         if (addr != null && srtpData != null) {
             transport.send(srtpData, addr).exceptionally(ex -> {
-                LOG.warning("Failed to send SRTP packet: " + ex.getMessage());
+                LOG.warn("Failed to send SRTP packet: " + ex.getMessage());
                 return null;
             });
         }
@@ -569,7 +571,7 @@ public class RTCPeerConnection implements AutoCloseable {
             }
             iceAgent.addLocalCandidates(hostCandidates);
         } catch (SocketException e) {
-            LOG.warning("Failed to gather candidates after restart: " + e.getMessage());
+            LOG.warn("Failed to gather candidates after restart: " + e.getMessage());
         }
 
         iceAgent.startGathering();
@@ -612,7 +614,7 @@ public class RTCPeerConnection implements AutoCloseable {
             }
             iceAgent.addLocalCandidates(hostCandidates);
         } catch (SocketException e) {
-            LOG.warning("Failed to gather candidates: " + e.getMessage());
+            LOG.warn("Failed to gather candidates: " + e.getMessage());
             String host = localAddr.getAddress().isAnyLocalAddress()
                 ? "127.0.0.1" : localAddr.getHostString();
             IceCandidate fallback = new IceCandidate("1", 1,
@@ -763,7 +765,7 @@ public class RTCPeerConnection implements AutoCloseable {
                 // 启动连接健康监控
                 startConnectionMonitor();
             } catch (Exception e) {
-                LOG.warning("DTLS/SCTP setup failed: " + e.getMessage());
+                LOG.warn("DTLS/SCTP setup failed: " + e.getMessage());
                 // 关闭前已经开始的连接则标记失败，否则忽略
                 if (iceConnectionState == IceConnectionState.CONNECTED
                     || iceConnectionState == IceConnectionState.COMPLETED) {
@@ -810,12 +812,12 @@ public class RTCPeerConnection implements AutoCloseable {
                         || sctpState == SctpAssociation.State.COOKIE_WAIT
                         || sctpState == SctpAssociation.State.COOKIE_ECHOED) {
                         // SCTP 连接已断开但应用层还认为是 CONNECTED
-                        LOG.warning("Connection monitor: SCTP state is " + sctpState
+                        LOG.warn("Connection monitor: SCTP state is " + sctpState
                             + ", but connection state is " + connectionState);
                     }
                 }
             } catch (Exception e) {
-                LOG.fine("Connection monitor check failed: " + e.getMessage());
+                LOG.error("Connection monitor check failed: " + e.getMessage());
             }
         }, CONNECTION_MONITOR_INTERVAL_MS, CONNECTION_MONITOR_INTERVAL_MS,
             TimeUnit.MILLISECONDS);
@@ -859,7 +861,7 @@ public class RTCPeerConnection implements AutoCloseable {
                             packetHandler.accept(packet);
                         }
                     } catch (SrtpException e) {
-                        LOG.fine("SRTP unprotect failed for SSRC " + peerSsrc + ": " + e.getMessage());
+                        LOG.error("SRTP unprotect failed for SSRC " + peerSsrc + ": " + e.getMessage());
                     }
                 });
                 LOG.info("Registered SRTP demux for SSRC " + peerSsrc + " (" + transceiver.getKind() + ")");
@@ -943,7 +945,7 @@ public class RTCPeerConnection implements AutoCloseable {
         try {
             dc.handleOpenMessage(new byte[0]);
         } catch (IOException e) {
-            LOG.warning("Failed to ACK DataChannel: " + e.getMessage());
+            LOG.warn("Failed to ACK DataChannel: " + e.getMessage());
         }
     }
 
@@ -960,7 +962,7 @@ public class RTCPeerConnection implements AutoCloseable {
         try {
             dc.open();
         } catch (IOException e) {
-            LOG.warning("Failed to open DataChannel: " + e.getMessage());
+            LOG.warn("Failed to open DataChannel: " + e.getMessage());
         }
     }
 
@@ -1141,7 +1143,7 @@ public class RTCPeerConnection implements AutoCloseable {
             return new IceCandidate(foundation, componentId, transportType,
                 new InetSocketAddress(ip, port), type, null);
         } catch (Exception e) {
-            LOG.warning("Failed to parse ICE candidate: " + e.getMessage());
+            LOG.warn("Failed to parse ICE candidate: " + e.getMessage());
             return null;
         }
     }

@@ -1,9 +1,12 @@
 package com.wenting.mediaserver.protocol.webrtc.core.ice;
 
+import com.wenting.mediaserver.protocol.webrtc.api.RTCPeerConnection;
 import com.wenting.mediaserver.protocol.webrtc.core.stun.StunConstants;
 import com.wenting.mediaserver.protocol.webrtc.core.stun.StunMessage;
 import com.wenting.mediaserver.protocol.webrtc.core.stun.StunMessage.Attribute;
 import com.wenting.mediaserver.protocol.webrtc.transport.DatagramIo;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -21,7 +24,6 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
-import java.util.logging.Logger;
 
 /**
  * ICE agent — 核心状态机，管理 ICE 连接建立过程 (RFC 5245).
@@ -37,7 +39,7 @@ import java.util.logging.Logger;
  *   agent.startConnectivityChecks();
  */
 public class IceAgent {
-    private static final Logger LOG = Logger.getLogger(IceAgent.class.getName());
+    private static final Logger LOG = LoggerFactory.getLogger(IceAgent.class);
 
     public enum Role { CONTROLLING, CONTROLLED }
 
@@ -231,12 +233,12 @@ public class IceAgent {
 
         if (pair.getRetryCount() < MAX_RETRIES_PER_PAIR) {
             pair.setRetryCount(pair.getRetryCount() + 1);
-            LOG.warning("ICE check retry " + pair.getRetryCount() + "/"
+            LOG.warn("ICE check retry " + pair.getRetryCount() + "/"
                 + MAX_RETRIES_PER_PAIR + " for " + pair);
             performCheck(pair);
         } else {
             pair.setState(CandidatePair.State.FAILED);
-            LOG.warning("ICE check failed after "
+            LOG.warn("ICE check failed after "
                 + (MAX_RETRIES_PER_PAIR + 1) + " attempts: " + pair);
             updateState();
         }
@@ -258,7 +260,7 @@ public class IceAgent {
         if (msg.isBindingRequest()) {
             CandidatePair pair = findPairByRemoteAddress(remoteAddr);
             if (pair == null) {
-                LOG.fine("Ignoring Binding Request from unknown address: " + remoteAddr);
+                LOG.error("Ignoring Binding Request from unknown address: " + remoteAddr);
                 return;
             }
 
@@ -409,7 +411,7 @@ public class IceAgent {
         timeoutScheduler.schedule(() -> {
             PendingSrflxRequest removed = pendingSrflx.remove(key);
             if (removed != null) {
-                LOG.fine("srflx request to " + server + " timed out");
+                LOG.error("srflx request to " + server + " timed out");
                 checkSrflxCompletion();
             }
         }, 5000, TimeUnit.MILLISECONDS);
@@ -475,7 +477,7 @@ public class IceAgent {
         InetSocketAddress target = pair.getRemote().getAddress();
         transport.send(data, target).exceptionally(ex -> {
             transactionPairs.remove(txKey);
-            LOG.warning("Nomination request failed: " + ex.getMessage());
+            LOG.warn("Nomination request failed: " + ex.getMessage());
             return null;
         });
 
@@ -669,10 +671,10 @@ public class IceAgent {
             lastConsentCheckMs = now;
             // 只有连续失败才触发
         }
-        LOG.warning("Consent freshness check failed (" + consentFailureCount
+        LOG.warn("Consent freshness check failed (" + consentFailureCount
             + "/" + MAX_CONSENT_FAILURES + ")");
         if (consentFailureCount >= MAX_CONSENT_FAILURES) {
-            LOG.severe("Connection lost: consent freshness failed after "
+            LOG.info("Connection lost: consent freshness failed after "
                 + MAX_CONSENT_FAILURES + " attempts");
             setState(State.FAILED);
         }
@@ -768,7 +770,7 @@ public class IceAgent {
             try {
                 listener.accept(event);
             } catch (Exception e) {
-                LOG.warning("ICE event listener error: " + e.getMessage());
+                LOG.warn("ICE event listener error: " + e.getMessage());
             }
         }
     }

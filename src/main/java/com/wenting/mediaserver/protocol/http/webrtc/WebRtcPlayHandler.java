@@ -8,7 +8,9 @@ import com.wenting.mediaserver.core.registry.StreamRegistry;
 import com.wenting.mediaserver.protocol.http.HttpRequestHandler;
 import com.wenting.mediaserver.protocol.webrtc.ServerWebRtcPeerSession;
 import com.wenting.mediaserver.protocol.webrtc.WebRtcSessionManager;
+import com.wenting.mediaserver.protocol.webrtc.api.MediaStreamTrack;
 import com.wenting.mediaserver.protocol.webrtc.api.RTCPeerConnection;
+import com.wenting.mediaserver.protocol.webrtc.api.RTCRtpTransceiver;
 import com.wenting.mediaserver.protocol.webrtc.api.RTCSessionDescription;
 import com.wenting.mediaserver.protocol.webrtc.transport.DatagramIoSender;
 import com.wenting.mediaserver.protocol.webrtc.transport.SessionDatagramIo;
@@ -80,6 +82,7 @@ public final class WebRtcPlayHandler implements HttpRequestHandler {
         try {
             RTCSessionDescription offer = new RTCSessionDescription("offer", offerSdp);
             peerConnection.setRemoteDescription(offer);
+            configureOutgoingVideoTrack(peerConnection, streamName);
             RTCSessionDescription answer = peerConnection.createAnswer().get();
             peerConnection.setLocalDescription(answer);
 
@@ -121,6 +124,35 @@ public final class WebRtcPlayHandler implements HttpRequestHandler {
 
     private static boolean isBlank(String value) {
         return value == null || value.trim().isEmpty();
+    }
+
+    private static void configureOutgoingVideoTrack(RTCPeerConnection peerConnection, String streamName) {
+        for (RTCRtpTransceiver transceiver : peerConnection.getTransceivers()) {
+            if (transceiver == null
+                    || transceiver.getKind() != MediaStreamTrack.Kind.VIDEO
+                    || transceiver.getSender() == null
+                    || transceiver.getSender().getTrack() != null
+                    || !canSend(transceiver)) {
+                continue;
+            }
+            transceiver.getSender().replaceTrack(new MediaStreamTrack(
+                    MediaStreamTrack.Kind.VIDEO,
+                    "webrtc-video-" + safeTrackId(streamName)
+            ));
+            return;
+        }
+    }
+
+    private static boolean canSend(RTCRtpTransceiver transceiver) {
+        return transceiver.getDirection() == RTCRtpTransceiver.Direction.SENDONLY
+                || transceiver.getDirection() == RTCRtpTransceiver.Direction.SENDRECV;
+    }
+
+    private static String safeTrackId(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return "stream";
+        }
+        return value.trim().replaceAll("[^A-Za-z0-9_-]", "_");
     }
 
     private static String extractPath(String uri) {
