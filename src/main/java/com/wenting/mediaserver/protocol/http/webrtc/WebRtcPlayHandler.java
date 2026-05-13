@@ -86,7 +86,8 @@ public final class WebRtcPlayHandler implements HttpRequestHandler {
             ServerWebRtcPeerSession session = new ServerWebRtcPeerSession(
                     UUID.randomUUID().toString(),
                     new StreamKey(stream.getProtocol(), app, streamName),
-                    peerConnection
+                    peerConnection,
+                    datagramIo
             );
             sessionManager.register(session);
 

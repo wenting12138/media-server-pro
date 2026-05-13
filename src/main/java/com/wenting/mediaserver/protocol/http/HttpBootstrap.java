@@ -44,24 +44,27 @@ public class HttpBootstrap implements IServerBootstrap {
 
     public HttpBootstrap(
             MediaServerConfig config,
-            StreamRegistry registry
+            StreamRegistry registry,
+            WebRtcSessionManager webRtcSessionManager,
+            DatagramIoSender datagramIoSender,
+            InetSocketAddress webRtcLocalAddress
     ) {
         this.config = config;
         this.registry = registry;
         this.hlsSessionManager = config.hlsFileStorageEnabled()
                 ? new HlsSessionManager(registry, Paths.get(config.hlsDirectory()))
                 : new HlsSessionManager(registry);
-        this.webRtcSessionManager = new WebRtcSessionManager();
+        this.webRtcSessionManager = webRtcSessionManager == null ? new WebRtcSessionManager() : webRtcSessionManager;
         this.webRtcPlayHandler = new WebRtcPlayHandler(
                 registry,
-                webRtcSessionManager,
-                new InetSocketAddress(config.webrtcPublicIp(), config.webrtcUdpPort()),
-                new DatagramIoSender() {
+                this.webRtcSessionManager,
+                webRtcLocalAddress == null ? new InetSocketAddress(config.webrtcPublicIp(), config.webrtcUdpPort()) : webRtcLocalAddress,
+                datagramIoSender == null ? new DatagramIoSender() {
                     @Override
                     public CompletableFuture<Void> send(byte[] data, InetSocketAddress target) {
                         return CompletableFuture.completedFuture(null);
                     }
-                }
+                } : datagramIoSender
         );
     }
 

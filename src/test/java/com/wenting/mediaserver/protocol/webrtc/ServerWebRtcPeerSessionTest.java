@@ -3,32 +3,47 @@ package com.wenting.mediaserver.protocol.webrtc;
 import com.wenting.mediaserver.core.enums.StreamProtocol;
 import com.wenting.mediaserver.core.model.StreamKey;
 import com.wenting.mediaserver.protocol.webrtc.api.RTCPeerConnection;
+import com.wenting.mediaserver.protocol.webrtc.transport.DatagramIoSender;
 import com.wenting.mediaserver.protocol.webrtc.transport.DatagramIo;
+import com.wenting.mediaserver.protocol.webrtc.transport.SessionDatagramIo;
 import com.wenting.mediaserver.protocol.webrtc.transport.UdpTransport;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertSame;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class ServerWebRtcPeerSessionTest {
 
     @Test
     public void shouldWrapPeerConnectionWithServiceSessionIdentity() throws Exception {
         StubDatagramIo transport = new StubDatagramIo();
-        RTCPeerConnection peerConnection = new RTCPeerConnection(transport);
-        try {
-            StreamKey streamKey = new StreamKey(StreamProtocol.RTMP, "live", "cam01");
-            ServerWebRtcPeerSession session = new ServerWebRtcPeerSession("sess-1", streamKey, peerConnection);
+            RTCPeerConnection peerConnection = new RTCPeerConnection(transport);
+            try {
+                StreamKey streamKey = new StreamKey(StreamProtocol.RTMP, "live", "cam01");
+                ServerWebRtcPeerSession session = new ServerWebRtcPeerSession(
+                        "sess-1",
+                        streamKey,
+                        peerConnection,
+                        new SessionDatagramIo(
+                                new InetSocketAddress("127.0.0.1", 18081),
+                                new DatagramIoSender() {
+                                    @Override
+                                    public CompletableFuture<Void> send(byte[] data, InetSocketAddress target) {
+                                        return CompletableFuture.completedFuture(null);
+                                    }
+                                }
+                        )
+                );
 
-            assertEquals("sess-1", session.sessionId());
-            assertSame(streamKey, session.streamKey());
-            assertSame(peerConnection, session.peerConnection());
-            assertEquals(1, transport.startCount);
+                assertEquals("sess-1", session.sessionId());
+                assertSame(streamKey, session.streamKey());
+                assertSame(peerConnection, session.peerConnection());
+                assertEquals(1, transport.startCount);
         } finally {
             peerConnection.close();
         }

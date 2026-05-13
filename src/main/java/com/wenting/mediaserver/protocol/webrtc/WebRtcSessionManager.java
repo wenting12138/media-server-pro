@@ -1,5 +1,6 @@
 package com.wenting.mediaserver.protocol.webrtc;
 
+import java.net.InetSocketAddress;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -13,6 +14,7 @@ public final class WebRtcSessionManager implements AutoCloseable {
 
     private final Map<String, ServerWebRtcPeerSession> sessionsById = new ConcurrentHashMap<String, ServerWebRtcPeerSession>();
     private final Map<String, ServerWebRtcPeerSession> sessionsByLocalUfrag = new ConcurrentHashMap<String, ServerWebRtcPeerSession>();
+    private final Map<InetSocketAddress, ServerWebRtcPeerSession> sessionsByRemoteAddress = new ConcurrentHashMap<InetSocketAddress, ServerWebRtcPeerSession>();
 
     public void register(ServerWebRtcPeerSession session) {
         if (session == null) {
@@ -43,8 +45,26 @@ public final class WebRtcSessionManager implements AutoCloseable {
             if (localUfrag != null) {
                 sessionsByLocalUfrag.remove(localUfrag);
             }
+            if (removed.peerConnection() != null) {
+                for (Map.Entry<InetSocketAddress, ServerWebRtcPeerSession> entry : sessionsByRemoteAddress.entrySet()) {
+                    if (entry != null && entry.getValue() == removed) {
+                        sessionsByRemoteAddress.remove(entry.getKey());
+                    }
+                }
+            }
         }
         return removed;
+    }
+
+    public void bindRemoteAddress(ServerWebRtcPeerSession session, InetSocketAddress remoteAddress) {
+        if (session == null || remoteAddress == null) {
+            return;
+        }
+        sessionsByRemoteAddress.put(remoteAddress, session);
+    }
+
+    public ServerWebRtcPeerSession findByRemoteAddress(InetSocketAddress remoteAddress) {
+        return remoteAddress == null ? null : sessionsByRemoteAddress.get(remoteAddress);
     }
 
     public int count() {
@@ -64,5 +84,6 @@ public final class WebRtcSessionManager implements AutoCloseable {
         }
         sessionsById.clear();
         sessionsByLocalUfrag.clear();
+        sessionsByRemoteAddress.clear();
     }
 }
