@@ -55,6 +55,19 @@ class HttpRouterHandlerTest {
     }
 
     @Test
+    void shouldDispatchToExactWebRtcPlayRoute() {
+        RecordingHandler testPage = new RecordingHandler("/webrtc/test");
+        RecordingHandler play = new RecordingHandler("/webrtc/play");
+        EmbeddedChannel channel = new EmbeddedChannel(new HttpRouterHandler(testPage, play));
+
+        channel.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.POST, "/webrtc/play"));
+
+        assertEquals(0, testPage.callCount);
+        assertEquals(1, play.callCount);
+        channel.finishAndReleaseAll();
+    }
+
+    @Test
     void shouldReturn404WhenNoRouteMatches() {
         EmbeddedChannel channel = new EmbeddedChannel(new HttpRouterHandler(new RecordingHandler("/hls/")));
 

@@ -583,6 +583,10 @@ public class RTCPeerConnection implements AutoCloseable {
     public SignalingState getSignalingState() { return signalingState; }
     public IceConnectionState getIceConnectionState() { return iceConnectionState; }
     public ConnectionState getConnectionState() { return connectionState; }
+    public String getLocalUfrag() { return localUfrag; }
+    public String getLocalPwd() { return localPwd; }
+    public String getLocalFingerprint() { return localFingerprint; }
+    public RTCSessionDescription getLocalDescription() { return localDescription; }
 
     // ========================================================================
     // Internal — ICE Agent creation

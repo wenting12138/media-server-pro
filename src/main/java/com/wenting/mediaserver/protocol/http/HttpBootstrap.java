@@ -1,6 +1,7 @@
 package com.wenting.mediaserver.protocol.http;
 
 import com.wenting.mediaserver.protocol.http.api.HttpJsonApiHandler;
+import com.wenting.mediaserver.protocol.http.webrtc.WebRtcPlayHandler;
 import com.wenting.mediaserver.protocol.http.webrtc.WebRtcTestPageHandler;
 import com.wenting.mediaserver.bootstrap.IServerBootstrap;
 import com.wenting.mediaserver.config.MediaServerConfig;
@@ -8,6 +9,8 @@ import com.wenting.mediaserver.core.registry.StreamRegistry;
 import com.wenting.mediaserver.protocol.http.flv.HttpFlvHandler;
 import com.wenting.mediaserver.protocol.http.hls.HlsHandler;
 import com.wenting.mediaserver.protocol.http.hls.HlsSessionManager;
+import com.wenting.mediaserver.protocol.webrtc.WebRtcSessionManager;
+import com.wenting.mediaserver.protocol.webrtc.transport.DatagramIoSender;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelInitializer;
@@ -25,6 +28,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.nio.file.Paths;
+import java.net.InetSocketAddress;
+import java.util.concurrent.CompletableFuture;
 
 public class HttpBootstrap implements IServerBootstrap {
     private final Logger log = LoggerFactory.getLogger(HttpBootstrap.class);
@@ -33,6 +38,8 @@ public class HttpBootstrap implements IServerBootstrap {
     private final MediaServerConfig config;
     private final StreamRegistry registry;
     private final HlsSessionManager hlsSessionManager;
+    private final WebRtcSessionManager webRtcSessionManager;
+    private final WebRtcPlayHandler webRtcPlayHandler;
     private Channel httpChannel;
 
     public HttpBootstrap(
@@ -44,6 +51,18 @@ public class HttpBootstrap implements IServerBootstrap {
         this.hlsSessionManager = config.hlsFileStorageEnabled()
                 ? new HlsSessionManager(registry, Paths.get(config.hlsDirectory()))
                 : new HlsSessionManager(registry);
+        this.webRtcSessionManager = new WebRtcSessionManager();
+        this.webRtcPlayHandler = new WebRtcPlayHandler(
+                registry,
+                webRtcSessionManager,
+                new InetSocketAddress(config.webrtcPublicIp(), config.webrtcUdpPort()),
+                new DatagramIoSender() {
+                    @Override
+                    public CompletableFuture<Void> send(byte[] data, InetSocketAddress target) {
+                        return CompletableFuture.completedFuture(null);
+                    }
+                }
+        );
     }
 
     @Override
@@ -59,6 +78,7 @@ public class HttpBootstrap implements IServerBootstrap {
                         ch.pipeline().addLast(new HttpObjectAggregator(65536));
                         ch.pipeline().addLast(new ChunkedWriteHandler());
                         ch.pipeline().addLast(new HttpRouterHandler(
+                                webRtcPlayHandler,
                                 new WebRtcTestPageHandler(),
                                 new HlsHandler(registry, hlsSessionManager),
                                 new HttpFlvHandler(registry),
@@ -84,6 +104,7 @@ public class HttpBootstrap implements IServerBootstrap {
             this.httpChannel.close();
         }
         this.hlsSessionManager.close();
+        this.webRtcSessionManager.close();
         this.worker.shutdownGracefully();
         this.boss.shutdownGracefully();
     }
