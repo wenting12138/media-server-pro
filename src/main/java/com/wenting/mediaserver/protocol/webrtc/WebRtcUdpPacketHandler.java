@@ -42,10 +42,9 @@ public final class WebRtcUdpPacketHandler implements UdpTransport.PacketHandler 
     private void handleStunPacket(byte[] data, InetSocketAddress remoteAddress) {
         try {
             StunMessage message = StunMessage.decode(data);
-            String localUfrag = extractLocalUfrag(message);
-            ServerWebRtcPeerSession session = sessionManager.findByLocalUfrag(localUfrag);
+            ServerWebRtcPeerSession session = findSessionByUsername(message);
             if (session == null) {
-                log.debug("Dropping STUN packet from {} because local ufrag {} is unknown", remoteAddress, localUfrag);
+                log.debug("Dropping STUN packet from {} because username is unknown", remoteAddress);
                 return;
             }
             sessionManager.bindRemoteAddress(session, remoteAddress);
@@ -63,16 +62,29 @@ public final class WebRtcUdpPacketHandler implements UdpTransport.PacketHandler 
                 && data[7] == 0x42;
     }
 
-    private static String extractLocalUfrag(StunMessage message) {
+    private ServerWebRtcPeerSession findSessionByUsername(StunMessage message) {
         byte[] username = message.getAttributeValue(StunConstants.ATTR_USERNAME);
         if (username == null || username.length == 0) {
             return null;
         }
         String value = new String(username, StandardCharsets.UTF_8);
-        int colonIndex = value.indexOf(':');
-        if (colonIndex < 0 || colonIndex == value.length() - 1) {
-            return value;
+        ServerWebRtcPeerSession session = sessionManager.findByLocalUfrag(value);
+        if (session != null) {
+            return session;
         }
-        return value.substring(colonIndex + 1);
+        int colonIndex = value.indexOf(':');
+        if (colonIndex < 0) {
+            return null;
+        }
+        String left = value.substring(0, colonIndex);
+        session = sessionManager.findByLocalUfrag(left);
+        if (session != null) {
+            return session;
+        }
+        if (colonIndex < value.length() - 1) {
+            String right = value.substring(colonIndex + 1);
+            return sessionManager.findByLocalUfrag(right);
+        }
+        return null;
     }
 }

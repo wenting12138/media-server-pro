@@ -24,6 +24,8 @@ import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.http.HttpVersion;
 import io.netty.util.CharsetUtil;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.net.InetSocketAddress;
 import java.util.UUID;
@@ -32,6 +34,8 @@ import java.util.UUID;
  * Minimal server-side WebRTC play signaling endpoint.
  */
 public final class WebRtcPlayHandler implements HttpRequestHandler {
+
+    private static final Logger log = LoggerFactory.getLogger(WebRtcPlayHandler.class);
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final String PLAY_PATH = "/webrtc/play";
@@ -85,6 +89,8 @@ public final class WebRtcPlayHandler implements HttpRequestHandler {
             configureOutgoingVideoTrack(peerConnection, streamName);
             RTCSessionDescription answer = peerConnection.createAnswer().get();
             peerConnection.setLocalDescription(answer);
+            log.info("coming  offer: \r\n{}",  offer.getSdp());
+            log.info("create answer: \r\n{}", answer.getSdp());
 
             ServerWebRtcPeerSession session = new ServerWebRtcPeerSession(
                     UUID.randomUUID().toString(),

@@ -260,8 +260,11 @@ public class IceAgent {
         if (msg.isBindingRequest()) {
             CandidatePair pair = findPairByRemoteAddress(remoteAddr);
             if (pair == null) {
-                LOG.error("Ignoring Binding Request from unknown address: " + remoteAddr);
-                return;
+                pair = createPeerReflexivePair(remoteAddr);
+                if (pair == null) {
+                    LOG.error("Ignoring Binding Request from unknown address: " + remoteAddr);
+                    return;
+                }
             }
 
             boolean useCandidate = msg.hasAttribute(StunConstants.ATTR_USE_CANDIDATE);
@@ -270,6 +273,9 @@ public class IceAgent {
             sendBindingResponse(msg, remoteAddr);
 
             // Update pair state
+            if (state == State.NEW || state == State.GATHERING) {
+                setState(State.CHECKING);
+            }
             boolean isNewSuccess = pair.getState() != CandidatePair.State.SUCCEEDED
                 && pair.getState() != CandidatePair.State.NOMINATED;
             if (isNewSuccess) {
@@ -716,6 +722,39 @@ public class IceAgent {
             }
         }
         return null;
+    }
+
+    private synchronized CandidatePair createPeerReflexivePair(InetSocketAddress remoteAddr) {
+        IceCandidate local = bestLocalCandidate();
+        if (local == null || remoteAddr == null) {
+            return null;
+        }
+        IceCandidate remote = new IceCandidate(
+            "prflx-" + foundationCounter.incrementAndGet(),
+            local.getComponentId(),
+            local.getTransport(),
+            remoteAddr,
+            CandidateType.PEER_REFLEXIVE,
+            null);
+        remoteCandidates.add(remote);
+        CandidatePair pair = new CandidatePair(local, remote);
+        checkList.add(pair);
+        Collections.sort(checkList);
+        LOG.info("Created peer-reflexive ICE pair from Binding Request: " + pair);
+        return pair;
+    }
+
+    private IceCandidate bestLocalCandidate() {
+        IceCandidate best = null;
+        for (IceCandidate candidate : localCandidates) {
+            if (candidate == null) {
+                continue;
+            }
+            if (best == null || candidate.getPriority() > best.getPriority()) {
+                best = candidate;
+            }
+        }
+        return best;
     }
 
     private CandidatePair findPairByTransaction(byte[] transactionId) {

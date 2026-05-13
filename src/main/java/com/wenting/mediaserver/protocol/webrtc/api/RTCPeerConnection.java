@@ -104,6 +104,7 @@ public class RTCPeerConnection implements AutoCloseable {
 
     // ---- SDP ----
     private RTCSessionDescription localDescription;
+    private SdpDescription remoteSdp;
 
     // ---- DataChannel ID counter (per-connection) ----
     private final AtomicInteger nextDataChannelId = new AtomicInteger(0);
@@ -232,6 +233,7 @@ public class RTCPeerConnection implements AutoCloseable {
     public void setRemoteDescription(RTCSessionDescription desc) throws RTCPeerConnectionException {
         try {
             SdpDescription parsed = SdpParser.parse(desc.getSdp());
+            this.remoteSdp = parsed;
 
             this.remoteUfrag = parsed.getIceUfrag();
             this.remotePwd = parsed.getIcePwd();
@@ -1030,6 +1032,9 @@ public class RTCPeerConnection implements AutoCloseable {
     // ========================================================================
 
     private String buildSdp(String type, IceAgent agent) {
+        if ("answer".equals(type) && remoteSdp != null) {
+            return buildAnswerSdp(agent, remoteSdp);
+        }
         InetSocketAddress localAddr = transport.getLocalAddress();
         String host = localAddr.getAddress().isAnyLocalAddress()
             ? "127.0.0.1" : localAddr.getHostString();
@@ -1052,6 +1057,7 @@ public class RTCPeerConnection implements AutoCloseable {
         // ===== Application (SCTP/DataChannel) media =====
         SdpBuilder.MediaBuilder appMedia = builder.addMedia("application", 9, "DTLS/SCTP", 5000);
         appMedia.addAttribute("mid", "0");
+        appMedia.addAttribute("setup", "actpass");
         addCandidateAttributes(appMedia, agent);
         appMedia.addAttribute("sctp-port", String.valueOf(SctpConstants.DEFAULT_OS));
 
@@ -1067,6 +1073,8 @@ public class RTCPeerConnection implements AutoCloseable {
                 trans.getKind() == MediaStreamTrack.Kind.AUDIO ? 111 : 96);
             media.addAttribute("mid", String.valueOf(i + 1));
             media.addAttribute("rtpmap", codec);
+            media.addAttribute("rtcp-mux");
+            media.addAttribute("setup", "actpass");
 
             // Direction
             switch (trans.getDirection()) {
@@ -1091,6 +1099,183 @@ public class RTCPeerConnection implements AutoCloseable {
         }
 
         return builder.build();
+    }
+
+    private String buildAnswerSdp(IceAgent agent, SdpDescription offer) {
+        InetSocketAddress localAddr = transport.getLocalAddress();
+        String host = localAddr.getAddress().isAnyLocalAddress()
+            ? "127.0.0.1" : localAddr.getHostString();
+        SdpBuilder builder = new SdpBuilder();
+        builder.setOrigin("-", System.currentTimeMillis(), host);
+
+        builder.addSessionAttribute("group", "BUNDLE " + answerBundleMids(offer));
+        builder.addSessionAttribute("ice-ufrag", localUfrag);
+        builder.addSessionAttribute("ice-pwd", localPwd);
+        builder.addSessionAttribute("fingerprint", "sha-256 " + localFingerprint);
+        builder.addSessionAttribute("msid-semantic", " WMS");
+
+        for (MediaDescription offeredMedia : offer.getMediaDescriptions()) {
+            if ("application".equals(offeredMedia.mediaType)) {
+                appendApplicationAnswer(builder, offeredMedia, agent);
+                continue;
+            }
+            if ("audio".equals(offeredMedia.mediaType) || "video".equals(offeredMedia.mediaType)) {
+                appendMediaAnswer(builder, offeredMedia, agent);
+            }
+        }
+
+        return builder.build();
+    }
+
+    private String answerBundleMids(SdpDescription offer) {
+        StringBuilder mids = new StringBuilder();
+        for (MediaDescription media : offer.getMediaDescriptions()) {
+            String mid = media.getMid();
+            if (mid == null || mid.trim().isEmpty()) {
+                continue;
+            }
+            if (mids.length() > 0) {
+                mids.append(' ');
+            }
+            mids.append(mid);
+        }
+        return mids.length() == 0 ? "0" : mids.toString();
+    }
+
+    private void appendApplicationAnswer(SdpBuilder builder, MediaDescription offeredMedia, IceAgent agent) {
+        int[] payloadTypes = toPayloadTypeArray(offeredMedia.payloadTypes);
+        if (payloadTypes.length == 0) {
+            payloadTypes = new int[]{5000};
+        }
+        SdpBuilder.MediaBuilder appMedia = builder.addMedia(
+            offeredMedia.mediaType,
+            9,
+            offeredMedia.protocol,
+            payloadTypes);
+        appMedia.addAttribute("mid", safeMid(offeredMedia));
+        appMedia.addAttribute("setup", "passive");
+        addCandidateAttributes(appMedia, agent);
+        appMedia.addAttribute("sctp-port", String.valueOf(SctpConstants.DEFAULT_OS));
+    }
+
+    private void appendMediaAnswer(SdpBuilder builder, MediaDescription offeredMedia, IceAgent agent) {
+        RTCRtpTransceiver transceiver = findTransceiverByMid(offeredMedia.getMid());
+        if (transceiver == null) {
+            SdpBuilder.MediaBuilder rejected = builder.addMedia(
+                offeredMedia.mediaType,
+                0,
+                offeredMedia.protocol,
+                firstPayloadTypeOrDefault(offeredMedia));
+            rejected.addAttribute("mid", safeMid(offeredMedia));
+            return;
+        }
+
+        int payloadType = answerPayloadType(offeredMedia, transceiver.getKind());
+        SdpBuilder.MediaBuilder media = builder.addMedia(offeredMedia.mediaType, 9, offeredMedia.protocol, payloadType);
+        media.addAttribute("mid", safeMid(offeredMedia));
+        media.addAttribute("rtpmap", answerRtpMap(offeredMedia, payloadType, transceiver.getKind()));
+        media.addAttribute("rtcp-mux");
+        media.addAttribute("setup", "passive");
+        addDirectionAttribute(media, transceiver.getDirection());
+
+        long ssrc = transceiver.getSender().getSsrc();
+        media.addAttribute("ssrc", ssrc + " cname:webrtc-java");
+
+        MediaStreamTrack track = transceiver.getSender().getTrack();
+        if (track != null) {
+            media.addAttribute("msid", safeMid(offeredMedia) + " " + track.getId());
+        }
+
+        addCandidateAttributes(media, agent);
+    }
+
+    private RTCRtpTransceiver findTransceiverByMid(String mid) {
+        if (mid == null) {
+            return null;
+        }
+        for (RTCRtpTransceiver transceiver : transceivers) {
+            if (transceiver != null && mid.equals(transceiver.getMid())) {
+                return transceiver;
+            }
+        }
+        return null;
+    }
+
+    private void addDirectionAttribute(SdpBuilder.MediaBuilder media, RTCRtpTransceiver.Direction direction) {
+        switch (direction) {
+            case SENDRECV: media.addAttribute("sendrecv"); break;
+            case SENDONLY: media.addAttribute("sendonly"); break;
+            case RECVONLY: media.addAttribute("recvonly"); break;
+            case INACTIVE: media.addAttribute("inactive"); break;
+            default: media.addAttribute("inactive"); break;
+        }
+    }
+
+    private int answerPayloadType(MediaDescription offeredMedia, MediaStreamTrack.Kind kind) {
+        String codecName = kind == MediaStreamTrack.Kind.AUDIO ? "opus/" : "h264/";
+        Integer matched = findPayloadTypeByCodec(offeredMedia, codecName);
+        if (matched != null) {
+            return matched.intValue();
+        }
+        return firstPayloadTypeOrDefault(offeredMedia);
+    }
+
+    private String answerRtpMap(MediaDescription offeredMedia, int payloadType, MediaStreamTrack.Kind kind) {
+        String offered = findRtpMapValue(offeredMedia, payloadType);
+        if (offered != null) {
+            return offered;
+        }
+        return kind == MediaStreamTrack.Kind.AUDIO
+            ? payloadType + " opus/48000/2"
+            : payloadType + " H264/90000";
+    }
+
+    private Integer findPayloadTypeByCodec(MediaDescription media, String codecPrefixLowerCase) {
+        for (SdpDescription.Attribute attr : media.attributes) {
+            if (!"rtpmap".equals(attr.key) || attr.value == null) {
+                continue;
+            }
+            String[] parts = attr.value.trim().split("\\s+", 2);
+            if (parts.length < 2 || !parts[1].toLowerCase(Locale.ROOT).startsWith(codecPrefixLowerCase)) {
+                continue;
+            }
+            try {
+                return Integer.valueOf(Integer.parseInt(parts[0]));
+            } catch (NumberFormatException e) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private String findRtpMapValue(MediaDescription media, int payloadType) {
+        String prefix = String.valueOf(payloadType) + " ";
+        for (SdpDescription.Attribute attr : media.attributes) {
+            if ("rtpmap".equals(attr.key) && attr.value != null && attr.value.startsWith(prefix)) {
+                return attr.value;
+            }
+        }
+        return null;
+    }
+
+    private int firstPayloadTypeOrDefault(MediaDescription media) {
+        if (!media.payloadTypes.isEmpty()) {
+            return media.payloadTypes.get(0).intValue();
+        }
+        return "audio".equals(media.mediaType) ? 111 : 96;
+    }
+
+    private int[] toPayloadTypeArray(List<Integer> payloadTypes) {
+        int[] result = new int[payloadTypes == null ? 0 : payloadTypes.size()];
+        for (int i = 0; i < result.length; i++) {
+            result[i] = payloadTypes.get(i).intValue();
+        }
+        return result;
+    }
+
+    private String safeMid(MediaDescription media) {
+        String mid = media.getMid();
+        return mid == null || mid.trim().isEmpty() ? "0" : mid;
     }
 
     private void addCandidateAttributes(SdpBuilder.MediaBuilder media, IceAgent agent) {

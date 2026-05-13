@@ -46,6 +46,7 @@ public class CandidateGatherer {
             while (addrs.hasMoreElements()) {
                 InetAddress addr = addrs.nextElement();
                 if (addr.isLoopbackAddress()) continue;
+                if (addr.isLinkLocalAddress()) continue;
 
                 // Foundation: same NIC + address type = same foundation (RFC 5245 §4.1.1.1)
                 String addrType = (addr instanceof Inet6Address) ? "v6" : "v4";
@@ -82,6 +83,7 @@ public class CandidateGatherer {
             while (addrs.hasMoreElements()) {
                 InetAddress addr = addrs.nextElement();
                 if (addr.isLoopbackAddress()) continue;
+                if (addr.isLinkLocalAddress()) continue;
                 if (!(addr instanceof Inet4Address)) continue;
 
                 String foundation = "host-" + (++foundationCounter);

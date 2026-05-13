@@ -52,6 +52,15 @@ class WebRtcPlayHandlerTest {
         assertEquals("answer", root.get("data").get("type").asText());
         String answerSdp = root.get("data").get("sdp").asText();
         assertTrue(answerSdp.contains("m=video"));
+        assertTrue(!answerSdp.contains("m=application"));
+        assertTrue(!answerSdp.contains("%"));
+        assertTrue(answerSdp.contains("a=group:BUNDLE 0\r\n"));
+        assertTrue(answerSdp.contains("a=mid:0\r\n"));
+        assertTrue(!answerSdp.contains("a=mid:1\r\n"));
+        assertTrue(answerSdp.contains("a=sendonly\r\n"));
+        assertTrue(answerSdp.contains("a=rtcp-mux\r\n"));
+        assertTrue(answerSdp.contains("a=setup:passive\r\n"));
+        assertTrue(answerSdp.contains("a=msid:0 webrtc-video-cam01\r\n"));
         assertTrue(answerSdp.contains("a=fingerprint:sha-256 "));
         assertTrue(answerSdp.contains("a=ice-ufrag:"));
         assertTrue(answerSdp.contains("a=rtpmap:96 H264/90000"));
@@ -125,7 +134,9 @@ class WebRtcPlayHandlerTest {
                 + "m=video 9 UDP/TLS/RTP/SAVPF 96\r\n"
                 + "c=IN IP4 0.0.0.0\r\n"
                 + "a=mid:0\r\n"
-                + "a=sendrecv\r\n"
+                + "a=setup:actpass\r\n"
+                + "a=recvonly\r\n"
+                + "a=rtcp-mux\r\n"
                 + "a=rtpmap:96 H264/90000\r\n";
     }
 

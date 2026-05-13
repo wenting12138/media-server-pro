@@ -35,6 +35,7 @@ public class RTCPeerConnectionTest {
             assertTrue("Missing candidate", sdp.contains("a=candidate:"));
             assertTrue("Missing media line", sdp.contains("m=application"));
             assertTrue("Missing DTLS/SCTP", sdp.contains("DTLS/SCTP"));
+            assertTrue("Missing DTLS setup role", sdp.contains("a=setup:actpass"));
         } finally {
             pc.close();
         }
@@ -50,6 +51,7 @@ public class RTCPeerConnectionTest {
             assertEquals("answer", answer.getType());
             assertTrue(answer.getSdp().contains("a=ice-ufrag:"));
             assertTrue(answer.getSdp().contains("a=fingerprint:sha-256 "));
+            assertTrue(answer.getSdp().contains("a=setup:passive"));
         } finally {
             pc.close();
         }

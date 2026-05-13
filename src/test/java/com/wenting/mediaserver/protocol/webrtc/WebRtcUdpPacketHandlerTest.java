@@ -21,6 +21,15 @@ public class WebRtcUdpPacketHandlerTest {
 
     @Test
     public void shouldBindRemoteAddressFromStunUsernameToSession() throws Exception {
+        assertBindRemoteAddressFromStunUsername(false);
+    }
+
+    @Test
+    public void shouldBindRemoteAddressFromStandardStunUsernameOrder() throws Exception {
+        assertBindRemoteAddressFromStunUsername(true);
+    }
+
+    private void assertBindRemoteAddressFromStunUsername(boolean localUfragFirst) throws Exception {
         RecordingDatagramSender sender = new RecordingDatagramSender();
         SessionDatagramIo datagramIo = new SessionDatagramIo(new InetSocketAddress("192.168.3.52", 18081), sender);
         RTCPeerConnection peerConnection = new RTCPeerConnection(datagramIo);
@@ -40,7 +49,10 @@ public class WebRtcUdpPacketHandlerTest {
             sessionManager.register(session);
 
             byte[] txId = new byte[12];
-            byte[] username = ("abcd:" + peerConnection.getLocalUfrag()).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            String usernameValue = localUfragFirst
+                    ? peerConnection.getLocalUfrag() + ":abcd"
+                    : "abcd:" + peerConnection.getLocalUfrag();
+            byte[] username = usernameValue.getBytes(java.nio.charset.StandardCharsets.UTF_8);
             List<StunMessage.Attribute> attrs = new ArrayList<StunMessage.Attribute>();
             attrs.add(new StunMessage.Attribute(StunConstants.ATTR_USERNAME, username));
             StunMessage request = new StunMessage(
