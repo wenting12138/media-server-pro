@@ -3,7 +3,7 @@ package com.wenting.mediaserver.protocol.webrtc.core.ice;
 import com.wenting.mediaserver.protocol.webrtc.core.stun.StunConstants;
 import com.wenting.mediaserver.protocol.webrtc.core.stun.StunMessage;
 import com.wenting.mediaserver.protocol.webrtc.core.stun.StunMessage.Attribute;
-import com.wenting.mediaserver.protocol.webrtc.transport.UdpTransport;
+import com.wenting.mediaserver.protocol.webrtc.transport.DatagramIo;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -73,7 +73,7 @@ public class IceAgent {
     /** Consent freshness 最大连续失败次数，超过则认为连接失效 */
     private static final int MAX_CONSENT_FAILURES = 2;
 
-    private final UdpTransport transport;
+    private final DatagramIo transport;
     private final Role role;
     private final SecureRandom random = new SecureRandom();
     private final AtomicInteger foundationCounter = new AtomicInteger(0);
@@ -121,7 +121,7 @@ public class IceAgent {
     private long lastConsentCheckMs = 0;
     private ScheduledFuture<?> consentCheckFuture;
 
-    public IceAgent(UdpTransport transport, Role role) {
+    public IceAgent(DatagramIo transport, Role role) {
         this.transport = transport;
         this.role = Objects.requireNonNull(role);
         this.tieBreaker = new SecureRandom().nextLong() & Long.MAX_VALUE;

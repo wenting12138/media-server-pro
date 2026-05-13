@@ -1,5 +1,6 @@
 package com.wenting.mediaserver.protocol.webrtc.core.dtls;
 
+import com.wenting.mediaserver.protocol.webrtc.transport.DatagramIo;
 import com.wenting.mediaserver.protocol.webrtc.transport.UdpTransport;
 import org.bouncycastle.tls.DatagramTransport;
 
@@ -19,13 +20,13 @@ public class UdpDatagramTransport implements DatagramTransport {
 
     private static final int MTU = 1500;
 
-    private final UdpTransport transport;
+    private final DatagramIo transport;
     private final InetSocketAddress peer;
     private final LinkedBlockingQueue<byte[]> receiveQueue;
 
     private volatile boolean closed = false;
 
-    public UdpDatagramTransport(UdpTransport transport, InetSocketAddress peer) {
+    public UdpDatagramTransport(DatagramIo transport, InetSocketAddress peer) {
         this(transport, peer, new LinkedBlockingQueue<byte[]>());
         // Register inbound packet handler to feed the queue
         transport.setPacketHandler((data, remote) -> {
@@ -39,7 +40,7 @@ public class UdpDatagramTransport implements DatagramTransport {
      * Constructor with an externally-managed receive queue.
      * The caller is responsible for feeding packets into the receiveQueue.
      */
-    public UdpDatagramTransport(UdpTransport transport, InetSocketAddress peer,
+    public UdpDatagramTransport(DatagramIo transport, InetSocketAddress peer,
                                  LinkedBlockingQueue<byte[]> receiveQueue) {
         this.transport = transport;
         this.peer = peer;

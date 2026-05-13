@@ -28,7 +28,7 @@ import java.util.logging.Logger;
  * 发送: channel.writeAndFlush(DatagramPacket)
  * 接收: SimpleChannelInboundHandler<DatagramPacket> 处理入站包
  */
-public class UdpTransport implements AutoCloseable {
+public class UdpTransport implements DatagramIo {
     private static final Logger LOG = Logger.getLogger(UdpTransport.class.getName());
 
     private final EventLoopGroup group;

@@ -15,6 +15,7 @@ import com.wenting.mediaserver.protocol.webrtc.core.srtp.SrtpCryptoContext;
 import com.wenting.mediaserver.protocol.webrtc.core.srtp.SrtpException;
 import com.wenting.mediaserver.protocol.webrtc.core.srtp.SrtpTransform;
 import com.wenting.mediaserver.protocol.webrtc.core.stun.StunMessage;
+import com.wenting.mediaserver.protocol.webrtc.transport.DatagramIo;
 import com.wenting.mediaserver.protocol.webrtc.transport.UdpTransport;
 
 import java.io.IOException;
@@ -62,7 +63,8 @@ public class RTCPeerConnection implements AutoCloseable {
     public volatile Consumer<ConnectionState> onConnectionStateChange;
 
     // ---- Internal components ----
-    private final UdpTransport transport;
+    private final DatagramIo transport;
+    private final boolean ownTransport;
     private IceAgent iceAgent;
     private volatile DtlsHandshake dtlsHandshake;
     private volatile SctpTransport sctpTransport;
@@ -120,8 +122,23 @@ public class RTCPeerConnection implements AutoCloseable {
     // ========================================================================
 
     public RTCPeerConnection() throws RTCPeerConnectionException {
+        this(createOwnedTransport(), true);
+    }
+
+    /**
+     * Constructor for integrating with a server-managed UDP listener.
+     */
+    public RTCPeerConnection(DatagramIo transport) throws RTCPeerConnectionException {
+        this(transport, false);
+    }
+
+    private RTCPeerConnection(DatagramIo transport, boolean ownTransport) throws RTCPeerConnectionException {
+        this.transport = transport;
+        this.ownTransport = ownTransport;
+        if (this.transport == null) {
+            throw new RTCPeerConnectionException("Datagram transport must not be null");
+        }
         try {
-            this.transport = new UdpTransport(0);
             this.transport.start();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -147,6 +164,10 @@ public class RTCPeerConnection implements AutoCloseable {
 
         // Set up STUN/DTLS demux handler
         setupPacketHandler();
+    }
+
+    private static DatagramIo createOwnedTransport() {
+        return new UdpTransport(0);
     }
 
     // ========================================================================
@@ -460,7 +481,9 @@ public class RTCPeerConnection implements AutoCloseable {
         connectionMonitor.shutdownNow();
         ssrcHandlers.clear();
         transceivers.clear();
-        transport.close(3, TimeUnit.SECONDS);
+        if (ownTransport) {
+            transport.close(3, TimeUnit.SECONDS);
+        }
     }
 
     /**
@@ -496,7 +519,9 @@ public class RTCPeerConnection implements AutoCloseable {
         transceivers.clear();
 
         // 关闭 UDP 传输（带超时）
-        transport.close(timeoutMs, TimeUnit.MILLISECONDS);
+        if (ownTransport) {
+            transport.close(timeoutMs, TimeUnit.MILLISECONDS);
+        }
     }
 
     /**
