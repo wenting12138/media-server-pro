@@ -3,6 +3,7 @@ package com.wenting.mediaserver.protocol.webrtc.api;
 import com.wenting.mediaserver.protocol.webrtc.core.dtls.DtlsHandshake;
 import com.wenting.mediaserver.protocol.webrtc.core.dtls.UdpDatagramTransport;
 import com.wenting.mediaserver.protocol.webrtc.core.ice.*;
+import com.wenting.mediaserver.protocol.webrtc.core.sctp.SctpAssociation;
 import org.bouncycastle.tls.DTLSTransport;
 import com.wenting.mediaserver.protocol.webrtc.core.rtp.RtpPacket;
 import com.wenting.mediaserver.protocol.webrtc.core.sctp.DataChannel;
@@ -774,11 +775,11 @@ public class RTCPeerConnection implements AutoCloseable {
 
                 // 检查 SCTP 状态
                 if (sctpTransport != null && sctpTransport.getAssociation() != null) {
-                    io.github.webrtc.core.sctp.SctpAssociation.State sctpState =
+                    SctpAssociation.State sctpState =
                         sctpTransport.getAssociation().getState();
-                    if (sctpState == io.github.webrtc.core.sctp.SctpAssociation.State.CLOSED
-                        || sctpState == io.github.webrtc.core.sctp.SctpAssociation.State.COOKIE_WAIT
-                        || sctpState == io.github.webrtc.core.sctp.SctpAssociation.State.COOKIE_ECHOED) {
+                    if (sctpState == SctpAssociation.State.CLOSED
+                        || sctpState == SctpAssociation.State.COOKIE_WAIT
+                        || sctpState == SctpAssociation.State.COOKIE_ECHOED) {
                         // SCTP 连接已断开但应用层还认为是 CONNECTED
                         LOG.warning("Connection monitor: SCTP state is " + sctpState
                             + ", but connection state is " + connectionState);
@@ -860,9 +861,9 @@ public class RTCPeerConnection implements AutoCloseable {
         }
 
         // Open pending DataChannels and signal CONNECTED when SCTP association is ready
-        io.github.webrtc.core.sctp.SctpAssociation assoc = sctpTransport.getAssociation();
+        SctpAssociation assoc = sctpTransport.getAssociation();
         assoc.setStateHandler(newState -> {
-            if (newState == io.github.webrtc.core.sctp.SctpAssociation.State.ESTABLISHED) {
+            if (newState == SctpAssociation.State.ESTABLISHED) {
                 for (DataChannel dc : pendingDataChannels) {
                     dc.setTransport(sctpTransport);
                     openDataChannel(dc);
@@ -873,7 +874,7 @@ public class RTCPeerConnection implements AutoCloseable {
         });
 
         // Check if already established (avoid race)
-        if (assoc.getState() == io.github.webrtc.core.sctp.SctpAssociation.State.ESTABLISHED) {
+        if (assoc.getState() == SctpAssociation.State.ESTABLISHED) {
             for (DataChannel dc : pendingDataChannels) {
                 dc.setTransport(sctpTransport);
                 openDataChannel(dc);

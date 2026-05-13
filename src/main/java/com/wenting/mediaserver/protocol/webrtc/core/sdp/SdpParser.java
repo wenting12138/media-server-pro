@@ -1,8 +1,8 @@
 package com.wenting.mediaserver.protocol.webrtc.core.sdp;
 
-import io.github.webrtc.core.sdp.SdpDescription.Attribute;
-import io.github.webrtc.core.sdp.SdpDescription.MediaDescription;
-import io.github.webrtc.core.sdp.SdpDescription.Origin;
+import com.wenting.mediaserver.protocol.webrtc.core.sdp.SdpDescription.Attribute;
+import com.wenting.mediaserver.protocol.webrtc.core.sdp.SdpDescription.MediaDescription;
+import com.wenting.mediaserver.protocol.webrtc.core.sdp.SdpDescription.Origin;
 
 import java.util.ArrayList;
 import java.util.List;
