@@ -2,6 +2,8 @@ package com.wenting.mediaserver.protocol.webrtc;
 
 import com.wenting.mediaserver.core.enums.StreamProtocol;
 import com.wenting.mediaserver.core.model.StreamKey;
+import com.wenting.mediaserver.core.publish.MediaSubscriberAdapter;
+import com.wenting.mediaserver.core.publish.DefaultPublishedStream;
 import com.wenting.mediaserver.protocol.webrtc.api.RTCPeerConnection;
 import com.wenting.mediaserver.protocol.webrtc.transport.DatagramIoSender;
 import com.wenting.mediaserver.protocol.webrtc.transport.DatagramIo;
@@ -14,6 +16,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -43,9 +46,47 @@ public class ServerWebRtcPeerSessionTest {
                 assertEquals("sess-1", session.sessionId());
                 assertSame(streamKey, session.streamKey());
                 assertSame(peerConnection, session.peerConnection());
+                assertNotNull(session.subscriberAdapter());
                 assertEquals(1, transport.startCount);
         } finally {
             peerConnection.close();
+        }
+    }
+
+    @Test
+    public void shouldAttachAndRemoveSubscriberFromPublishedStream() throws Exception {
+        StubDatagramIo transport = new StubDatagramIo();
+        RTCPeerConnection peerConnection = new RTCPeerConnection(transport);
+        StreamKey streamKey = new StreamKey(StreamProtocol.RTMP, "live", "cam01");
+        DefaultPublishedStream publishedStream = new DefaultPublishedStream(streamKey);
+
+        ServerWebRtcPeerSession session = new ServerWebRtcPeerSession(
+                "sess-2",
+                streamKey,
+                peerConnection,
+                new SessionDatagramIo(
+                        new InetSocketAddress("127.0.0.1", 18081),
+                        new DatagramIoSender() {
+                            @Override
+                            public CompletableFuture<Void> send(byte[] data, InetSocketAddress target) {
+                                return CompletableFuture.completedFuture(null);
+                            }
+                        }
+                )
+        );
+
+        try {
+            session.attachPublishedStream(publishedStream);
+
+            assertEquals(1, publishedStream.subscriberCount());
+            MediaSubscriberAdapter adapter = session.subscriberAdapter();
+            assertEquals("sess-2", adapter.sessionId());
+
+            session.close();
+
+            assertEquals(0, publishedStream.subscriberCount());
+        } finally {
+            session.close();
         }
     }
 

@@ -89,6 +89,7 @@ public final class WebRtcPlayHandler implements HttpRequestHandler {
                     peerConnection,
                     datagramIo
             );
+            session.attachPublishedStream(stream);
             sessionManager.register(session);
 
             String body = OBJECT_MAPPER.writeValueAsString(new PlayResponse(0, "success", new PlayResponseData(answer.getType(), answer.getSdp())));
