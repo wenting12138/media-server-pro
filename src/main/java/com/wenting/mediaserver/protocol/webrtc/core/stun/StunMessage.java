@@ -1,15 +1,19 @@
 package com.wenting.mediaserver.protocol.webrtc.core.stun;
 
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 import java.net.Inet4Address;
 import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.UnknownHostException;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import java.util.zip.CRC32;
 
 /**
  * STUN message (RFC 5389).
@@ -120,7 +124,8 @@ public class StunMessage {
 
         int typeField = encodeTypeField();
         buf.putShort((short) typeField);
-        buf.putShort((short) totalAttrLength);
+        // Final STUN header length includes all attributes (including FINGERPRINT).
+        buf.putShort((short) messageLength);
         buf.putInt(StunConstants.MAGIC_COOKIE);
         buf.put(transactionId);
 
@@ -135,6 +140,80 @@ public class StunMessage {
         buf.putInt(fingerprintValue);
 
         return buf.array();
+    }
+
+    /**
+     * Encode the STUN message including MESSAGE-INTEGRITY (RFC 5389 Section 15.4).
+     *
+     * MESSAGE-INTEGRITY is HMAC-SHA1 of the message up to (but not including) the
+     * MESSAGE-INTEGRITY attribute, using the password as the key.
+     * FINGERPRINT is computed over all bytes including MESSAGE-INTEGRITY.
+     *
+     * If password is null or empty, behaves like {@link #encode()} (no MESSAGE-INTEGRITY).
+     */
+    public byte[] encode(String password) {
+        if (password == null || password.isEmpty()) {
+            return encode();
+        }
+
+        // Encode all regular attributes
+        byte[][] attrData = new byte[attributes.size()][];
+        int attrLength = 0;
+        for (int i = 0; i < attributes.size(); i++) {
+            attrData[i] = attributes.get(i).encode();
+            attrLength += attrData[i].length;
+        }
+
+        int miLength = 24; // 4-byte header + 20-byte HMAC-SHA1
+        int fpLength = 8;  // 4-byte header + 4-byte CRC32
+        int totalLength = attrLength + miLength + fpLength;
+
+        ByteBuffer buf = ByteBuffer.allocate(StunConstants.HEADER_SIZE + totalLength);
+
+        // During HMAC calculation, STUN header length includes attributes up to
+        // MESSAGE-INTEGRITY (excluding FINGERPRINT), per RFC 5389/8489.
+        int typeField = encodeTypeField();
+        buf.putShort((short) typeField);
+        buf.putShort((short) (attrLength + miLength));
+        buf.putInt(StunConstants.MAGIC_COOKIE);
+        buf.put(transactionId);
+
+        // Regular attributes (the HMAC-SHA1 input includes header + these)
+        for (byte[] attr : attrData) {
+            buf.put(attr);
+        }
+
+        // MESSAGE-INTEGRITY: HMAC-SHA1 of header + all regular attributes
+        byte[] hmac = computeHmacSha1(buf.array(), buf.position(), password);
+        buf.putShort((short) StunConstants.ATTR_MESSAGE_INTEGRITY);
+        buf.putShort((short) 20);
+        buf.put(hmac);
+
+        // Final STUN header length must include all attributes, including
+        // FINGERPRINT (legacy interop relies on this exact wire format).
+        buf.putShort(2, (short) totalLength);
+
+        // FINGERPRINT (CRC32 of all bytes including MESSAGE-INTEGRITY)
+        int crc = calculateCrc32(buf.array(), buf.position());
+        int fingerprintValue = crc ^ 0x5354554E;
+        buf.putShort((short) StunConstants.ATTR_FINGERPRINT);
+        buf.putShort((short) 4);
+        buf.putInt(fingerprintValue);
+
+        return buf.array();
+    }
+
+    private static byte[] computeHmacSha1(byte[] data, int length, String key) {
+        try {
+            Mac mac = Mac.getInstance("HmacSHA1");
+            SecretKeySpec keySpec = new SecretKeySpec(
+                key.getBytes(StandardCharsets.UTF_8), "HmacSHA1");
+            mac.init(keySpec);
+            mac.update(data, 0, length);
+            return mac.doFinal();
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to compute STUN MESSAGE-INTEGRITY", e);
+        }
     }
 
     public static StunMessage decode(byte[] data) {
@@ -157,14 +236,15 @@ public class StunMessage {
         byte[] transactionId = new byte[12];
         buf.get(transactionId);
 
-        // RFC 5389 type field:
-        //   M0-M3: bits 0-3, C0: bit 4, M4: bit 5, M5: bit 6, C1: bit 7, M6-M11: bits 8-13
-        int method = (typeField & 0x000F);
-        method |= ((typeField & 0x0060) >> 1);   // M4-M5 from bits 5-6
-        method |= ((typeField & 0x3F00) >> 2);   // M6-M11 from bits 8-13
+        // RFC 5389/8489 type field layout:
+        //   00 M11 M10 M9 M8 C1 M7 M6 M5 C0 M4 M3 M2 M1 M0
+        int method = (typeField & 0x000F);             // M0-M3
+        method |= (typeField & 0x0010);                // M4
+        method |= ((typeField & 0x01C0) >> 1);         // M5-M7 from bits 6-8
+        method |= ((typeField & 0x3E00) >> 2);         // M8-M11 from bits 10-13
 
-        int classBits = ((typeField & 0x0010) >> 4)
-                      | ((typeField & 0x0080) >> 6);
+        int classBits = ((typeField >> 4) & 0x01)      // C0 at bit 4
+                      | (((typeField >> 8) & 0x01) << 1); // C1 at bit 8
 
         List<Attribute> attrs = new ArrayList<>();
         int offset = StunConstants.HEADER_SIZE;
@@ -268,10 +348,11 @@ public class StunMessage {
     private int encodeTypeField() {
         int type = 0;
         type |= (method & 0x000F);               // M0-M3 -> bits 0-3
-        type |= ((method & 0x0030) << 1);        // M4-M5 -> bits 5-6
-        type |= ((method & 0x0FC0) << 2);        // M6-M11 -> bits 8-13
+        type |= (method & 0x0010);               // M4 -> bit 4
+        type |= ((method & 0x00E0) << 1);        // M5-M7 -> bits 6-8
+        type |= ((method & 0x0F00) << 2);        // M8-M11 -> bits 10-13
         type |= ((messageClass & 0x01) << 4);    // C0 -> bit 4
-        type |= ((messageClass & 0x02) << 6);    // C1 -> bit 7
+        type |= ((messageClass & 0x02) << 7);    // C1 -> bit 8
         return type;
     }
 
@@ -338,18 +419,9 @@ public class StunMessage {
     }
 
     private static int calculateCrc32(byte[] data, int length) {
-        int crc = 0xFFFFFFFF;
-        for (int i = 0; i < length; i++) {
-            crc ^= (data[i] & 0xFF);
-            for (int j = 0; j < 8; j++) {
-                if ((crc & 1) != 0) {
-                    crc = (crc >>> 1) ^ 0xEDB88320;
-                } else {
-                    crc = crc >>> 1;
-                }
-            }
-        }
-        return ~crc;
+        CRC32 crc = new CRC32();
+        crc.update(data, 0, length);
+        return (int) crc.getValue();
     }
 
     static String bytesToHex(byte[] bytes) {

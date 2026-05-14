@@ -38,6 +38,8 @@ public class StunMessageTest {
 
         StunMessage req = StunMessage.createBindingRequest(txId);
         byte[] encoded = req.encode();
+        int typeField = ((encoded[0] & 0xFF) << 8) | (encoded[1] & 0xFF);
+        assertEquals("Binding Request type must be 0x0001", 0x0001, typeField);
 
         // 最小长度: 20 (header) + 8 (FINGERPRINT)
         assertTrue("Encoded length should be >= 28", encoded.length >= 28);
@@ -46,6 +48,8 @@ public class StunMessageTest {
         assertEquals(StunConstants.METHOD_BINDING, decoded.getMethod());
         assertEquals(StunClass.REQUEST, decoded.getMessageClass());
         assertArrayEquals(txId, decoded.getTransactionId());
+        int msgLen = ((encoded[2] & 0xFF) << 8) | (encoded[3] & 0xFF);
+        assertEquals("Header length should match payload size", encoded.length - 20, msgLen);
     }
 
     @Test
@@ -58,6 +62,8 @@ public class StunMessageTest {
 
         StunMessage response = StunMessage.createBindingResponse(txId, mappedAddr, null);
         byte[] encoded = response.encode();
+        int typeField = ((encoded[0] & 0xFF) << 8) | (encoded[1] & 0xFF);
+        assertEquals("Binding Success Response type must be 0x0101", 0x0101, typeField);
 
         StunMessage decoded = StunMessage.decode(encoded);
         assertEquals(StunConstants.METHOD_BINDING, decoded.getMethod());
@@ -172,5 +178,19 @@ public class StunMessageTest {
 
         assertEquals("PRIORITY should round-trip", priority, decoded.getIcePriority());
         assertEquals("tie-breaker should round-trip", tieBreaker, decoded.getIceTieBreaker());
+    }
+
+    @Test
+    public void testBindingResponseEncodeWithMessageIntegrityLengthField() throws Exception {
+        byte[] txId = new byte[12];
+        random.nextBytes(txId);
+        InetSocketAddress mappedAddr = new InetSocketAddress(
+            InetAddress.getByName("203.0.113.42"), 3478);
+
+        StunMessage response = StunMessage.createBindingResponse(txId, mappedAddr, null);
+        byte[] encoded = response.encode("local-ice-password");
+
+        int msgLen = ((encoded[2] & 0xFF) << 8) | (encoded[3] & 0xFF);
+        assertEquals("Header length should include FINGERPRINT", encoded.length - 20, msgLen);
     }
 }

@@ -15,6 +15,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 
 public class WebRtcUdpPacketHandlerTest {
@@ -27,6 +28,41 @@ public class WebRtcUdpPacketHandlerTest {
     @Test
     public void shouldBindRemoteAddressFromStandardStunUsernameOrder() throws Exception {
         assertBindRemoteAddressFromStunUsername(true);
+    }
+
+    @Test
+    public void shouldRouteDtlsPacketAfterStunBindsRemoteAddress() throws Exception {
+        RecordingDatagramSender sender = new RecordingDatagramSender();
+        SessionDatagramIo datagramIo = new SessionDatagramIo(new InetSocketAddress("192.168.3.52", 18081), sender);
+        RTCPeerConnection peerConnection = new RTCPeerConnection(datagramIo);
+        WebRtcSessionManager sessionManager = new WebRtcSessionManager();
+        try {
+            RTCSessionDescription offer = new RTCSessionDescription("offer", offerWithH264());
+            peerConnection.setRemoteDescription(offer);
+            RTCSessionDescription answer = peerConnection.createAnswer().get();
+            peerConnection.setLocalDescription(answer);
+
+            ServerWebRtcPeerSession session = new ServerWebRtcPeerSession(
+                    "sess-1",
+                    new StreamKey(StreamProtocol.RTMP, "live", "cam01"),
+                    peerConnection,
+                    datagramIo
+            );
+            sessionManager.register(session);
+
+            final byte[][] received = new byte[1][];
+            datagramIo.setPacketHandler((data, remoteAddress) -> received[0] = data);
+
+            InetSocketAddress remoteAddress = new InetSocketAddress("192.168.3.60", 50000);
+            new WebRtcUdpPacketHandler(sessionManager).onPacket(bindingRequest(peerConnection, true).encode(), remoteAddress);
+
+            byte[] dtlsClientHello = new byte[]{22, (byte) 0xFE, (byte) 0xFD, 0, 0, 0, 0, 0};
+            new WebRtcUdpPacketHandler(sessionManager).onPacket(dtlsClientHello, remoteAddress);
+
+            assertArrayEquals(dtlsClientHello, received[0]);
+        } finally {
+            sessionManager.close();
+        }
     }
 
     private void assertBindRemoteAddressFromStunUsername(boolean localUfragFirst) throws Exception {
@@ -48,19 +84,7 @@ public class WebRtcUdpPacketHandlerTest {
             );
             sessionManager.register(session);
 
-            byte[] txId = new byte[12];
-            String usernameValue = localUfragFirst
-                    ? peerConnection.getLocalUfrag() + ":abcd"
-                    : "abcd:" + peerConnection.getLocalUfrag();
-            byte[] username = usernameValue.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-            List<StunMessage.Attribute> attrs = new ArrayList<StunMessage.Attribute>();
-            attrs.add(new StunMessage.Attribute(StunConstants.ATTR_USERNAME, username));
-            StunMessage request = new StunMessage(
-                    StunConstants.METHOD_BINDING,
-                    com.wenting.mediaserver.protocol.webrtc.core.stun.StunClass.REQUEST,
-                    txId,
-                    attrs
-            );
+            StunMessage request = bindingRequest(peerConnection, localUfragFirst);
 
             InetSocketAddress remoteAddress = new InetSocketAddress("192.168.3.60", 50000);
             new WebRtcUdpPacketHandler(sessionManager).onPacket(request.encode(), remoteAddress);
@@ -85,6 +109,22 @@ public class WebRtcUdpPacketHandlerTest {
                 + "a=mid:0\r\n"
                 + "a=sendrecv\r\n"
                 + "a=rtpmap:96 H264/90000\r\n";
+    }
+
+    private static StunMessage bindingRequest(RTCPeerConnection peerConnection, boolean localUfragFirst) {
+        byte[] txId = new byte[12];
+        String usernameValue = localUfragFirst
+                ? peerConnection.getLocalUfrag() + ":abcd"
+                : "abcd:" + peerConnection.getLocalUfrag();
+        byte[] username = usernameValue.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        List<StunMessage.Attribute> attrs = new ArrayList<StunMessage.Attribute>();
+        attrs.add(new StunMessage.Attribute(StunConstants.ATTR_USERNAME, username));
+        return new StunMessage(
+                StunConstants.METHOD_BINDING,
+                com.wenting.mediaserver.protocol.webrtc.core.stun.StunClass.REQUEST,
+                txId,
+                attrs
+        );
     }
 
     private static final class RecordingDatagramSender implements DatagramIoSender {

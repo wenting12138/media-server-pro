@@ -42,11 +42,17 @@ public final class WebRtcUdpPacketHandler implements UdpTransport.PacketHandler 
     private void handleStunPacket(byte[] data, InetSocketAddress remoteAddress) {
         try {
             StunMessage message = StunMessage.decode(data);
+            String usernameValue = stunUsername(message);
             ServerWebRtcPeerSession session = findSessionByUsername(message);
             if (session == null) {
                 log.debug("Dropping STUN packet from {} because username is unknown", remoteAddress);
                 return;
             }
+            log.info("STUN request matched session={} remote={} username={} localUfrag={}",
+                    session.sessionId(),
+                    remoteAddress,
+                    usernameValue,
+                    session.peerConnection().getLocalUfrag());
             sessionManager.bindRemoteAddress(session, remoteAddress);
             session.receive(data, remoteAddress);
         } catch (Exception e) {
@@ -60,6 +66,10 @@ public final class WebRtcUdpPacketHandler implements UdpTransport.PacketHandler 
                 && data[5] == 0x12
                 && data[6] == (byte) 0xA4
                 && data[7] == 0x42;
+    }
+
+    private static boolean isDtlsPacket(byte[] data) {
+        return data.length > 0 && (data[0] & 0xFF) >= 20 && (data[0] & 0xFF) <= 63;
     }
 
     private ServerWebRtcPeerSession findSessionByUsername(StunMessage message) {
@@ -86,5 +96,13 @@ public final class WebRtcUdpPacketHandler implements UdpTransport.PacketHandler 
             return sessionManager.findByLocalUfrag(right);
         }
         return null;
+    }
+
+    private static String stunUsername(StunMessage message) {
+        byte[] username = message.getAttributeValue(StunConstants.ATTR_USERNAME);
+        if (username == null || username.length == 0) {
+            return "";
+        }
+        return new String(username, StandardCharsets.UTF_8);
     }
 }

@@ -20,6 +20,7 @@ import java.math.BigInteger;
 import java.security.*;
 import java.util.Date;
 import java.util.Hashtable;
+import java.util.Vector;
 import java.util.concurrent.*;
 
 /**
@@ -281,6 +282,25 @@ public class DtlsHandshake {
             Hashtable exts = super.getServerExtensions();
             TlsSRTPUtils.addUseSRTPExtension(exts, srtpData);
             return exts;
+        }
+
+        @Override
+        @SuppressWarnings({"rawtypes", "unchecked"})
+        public CertificateRequest getCertificateRequest() throws IOException {
+            short[] certificateTypes = new short[]{
+                ClientCertificateType.rsa_sign,
+                ClientCertificateType.ecdsa_sign
+            };
+            Vector signatureAlgorithms = new Vector();
+            signatureAlgorithms.addElement(new SignatureAndHashAlgorithm(HashAlgorithm.sha256, SignatureAlgorithm.rsa));
+            signatureAlgorithms.addElement(new SignatureAndHashAlgorithm(HashAlgorithm.sha256, SignatureAlgorithm.ecdsa));
+            return new CertificateRequest(certificateTypes, signatureAlgorithms, null);
+        }
+
+        @Override
+        public void notifyClientCertificate(org.bouncycastle.tls.Certificate clientCertificate) throws IOException {
+            // WebRTC peers authenticate the certificate through the SDP fingerprint.
+            // Fingerprint verification is handled by the signaling layer in a later step.
         }
 
         @Override

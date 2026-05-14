@@ -710,7 +710,14 @@ public class IceAgent {
     private void sendBindingResponse(StunMessage request, InetSocketAddress target) {
         byte[] txId = request.getTransactionId();
         StunMessage response = StunMessage.createBindingResponse(txId, target, null);
-        byte[] data = response.encode();
+        byte[] data = response.encode(upwd);
+        LOG.info("Sending STUN Binding Response to {} with MESSAGE-INTEGRITY (password={})",
+            target, upwd != null ? "set" : "null");
+        if (LOG.isInfoEnabled()) {
+            StringBuilder hex = new StringBuilder(data.length * 2);
+            for (byte b : data) hex.append(String.format("%02x", b));
+            LOG.info("STUN response hex (" + data.length + " bytes): " + hex.toString());
+        }
         transport.send(data, target);
     }
 

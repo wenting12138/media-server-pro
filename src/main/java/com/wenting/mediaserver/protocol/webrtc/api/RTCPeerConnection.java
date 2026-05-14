@@ -27,6 +27,7 @@ import java.net.SocketException;
 import java.security.SecureRandom;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
@@ -75,6 +76,7 @@ public class RTCPeerConnection implements AutoCloseable {
 
     // DTLS receive queue — populated by dispatch handler, consumed by DTLS
     private final LinkedBlockingQueue<byte[]> dtlsReceiveQueue = new LinkedBlockingQueue<>();
+    private final AtomicBoolean firstDtlsPacketLogged = new AtomicBoolean(false);
 
     // ---- Media / SRTP ----
     private final List<RTCRtpTransceiver> transceivers = new CopyOnWriteArrayList<>();
@@ -976,13 +978,21 @@ public class RTCPeerConnection implements AutoCloseable {
         transport.setPacketHandler((data, remote) -> {
             if (isStunPacket(data)) {
                 handleStunPacket(data, remote);
+            } else if (isDtlsPacket(data)) {
+                if (firstDtlsPacketLogged.compareAndSet(false, true)) {
+                    LOG.info("First DTLS packet received from " + remote
+                        + " contentType=" + (data[0] & 0xFF)
+                        + " bytes=" + data.length);
+                }
+                dtlsReceiveQueue.offer(data);
             } else if (isRtpPacket(data)) {
                 handleRtpPacket(data, remote);
-            } else if (!dtlsReceiveQueue.isEmpty() || (data.length > 0 && data[0] >= 20 && data[0] <= 23)) {
-                // Looks like DTLS (content type 20-23 = change_cipher/alert/handshake/app)
-                dtlsReceiveQueue.offer(data);
             }
         });
+    }
+
+    private static boolean isDtlsPacket(byte[] data) {
+        return data.length > 0 && (data[0] & 0xFF) >= 20 && (data[0] & 0xFF) <= 63;
     }
 
     private static boolean isRtpPacket(byte[] data) {
