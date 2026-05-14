@@ -19,7 +19,7 @@
         <logback.version>1.2.13</logback.version>
         <junit-jupiter.version>5.11.4</junit-jupiter.version>
         <junit.version>4.13.2</junit.version>
-        <bouncycastle.version>1.68</bouncycastle.version>
+        <bouncycastle.version>1.70</bouncycastle.version>
     </properties>
 
     <dependencies>

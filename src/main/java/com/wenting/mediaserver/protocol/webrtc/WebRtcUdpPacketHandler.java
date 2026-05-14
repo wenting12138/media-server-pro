@@ -48,11 +48,6 @@ public final class WebRtcUdpPacketHandler implements UdpTransport.PacketHandler 
                 log.debug("Dropping STUN packet from {} because username is unknown", remoteAddress);
                 return;
             }
-            log.info("STUN request matched session={} remote={} username={} localUfrag={}",
-                    session.sessionId(),
-                    remoteAddress,
-                    usernameValue,
-                    session.peerConnection().getLocalUfrag());
             sessionManager.bindRemoteAddress(session, remoteAddress);
             session.receive(data, remoteAddress);
         } catch (Exception e) {

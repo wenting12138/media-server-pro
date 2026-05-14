@@ -1,75 +1,84 @@
 package com.wenting.mediaserver.protocol.webrtc.core.dtls;
 
-import org.bouncycastle.asn1.x500.X500Name;
-import org.bouncycastle.cert.X509CertificateHolder;
-import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder;
-import org.bouncycastle.crypto.params.AsymmetricKeyParameter;
-import org.bouncycastle.crypto.util.PrivateKeyFactory;
-import org.bouncycastle.operator.ContentSigner;
-import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
+import io.netty.handler.ssl.util.SelfSignedCertificate;
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.bouncycastle.tls.*;
 import org.bouncycastle.tls.crypto.TlsCertificate;
 import org.bouncycastle.tls.crypto.TlsCrypto;
 import org.bouncycastle.tls.crypto.TlsCryptoParameters;
-import org.bouncycastle.tls.crypto.impl.bc.BcDefaultTlsCredentialedSigner;
-import org.bouncycastle.tls.crypto.impl.bc.BcTlsCertificate;
-import org.bouncycastle.tls.crypto.impl.bc.BcTlsCrypto;
+import org.bouncycastle.tls.crypto.impl.jcajce.JcaDefaultTlsCredentialedSigner;
+import org.bouncycastle.tls.crypto.impl.jcajce.JcaTlsCrypto;
+import org.bouncycastle.tls.crypto.impl.jcajce.JcaTlsCryptoProvider;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.math.BigInteger;
-import java.security.*;
-import java.util.Date;
+import java.security.MessageDigest;
+import java.security.PrivateKey;
+import java.security.SecureRandom;
+import java.security.Security;
 import java.util.Hashtable;
-import java.util.Vector;
 import java.util.concurrent.*;
 
 /**
  * DTLS handshake helper using BouncyCastle.
  *
- * 封装 BouncyCastle 的 DTLS 1.2 握手流程:
- * 1. 创建 DTLS 客户端/服务器
- * 2. 执行握手
- * 3. 导出 SRTP key material (RFC 5764)
+ * Uses the same negotiation path as the legacy WebRtcBcDtlsEngine:
+ * - JcaTlsCrypto (BC provider)
+ * - RSA ECDHE cipher suites
+ * - mandatory use_srtp profile: SRTP_AES128_CM_HMAC_SHA1_80
  */
 public class DtlsHandshake {
 
-    private static final int[] RSA_CIPHER_SUITES = new int[]{
-        CipherSuite.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+    private static final Logger LOG = LoggerFactory.getLogger(DtlsHandshake.class);
+    private static final int DTLS_SRTP_EXPORTER_LEN = 2 * (16 + 14);
+
+    private static final int[] WEBRTC_CIPHER_SUITES = new int[]{
+        CipherSuite.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+        CipherSuite.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+        CipherSuite.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA
     };
 
     private DTLSTransport dtlsTransport;
     private byte[] srtpKeyMaterial;
 
-    /**
-     * DTLS handshake with auto-generated self-signed certificate.
-     */
     public DtlsHandshake(UdpDatagramTransport transport, boolean isServer) throws IOException {
         this(transport, isServer, null);
     }
 
-    /**
-     * DTLS handshake with pre-generated certificate credentials.
-     */
     public DtlsHandshake(UdpDatagramTransport transport, boolean isServer,
-                          CertCredentials certCredentials) throws IOException {
-        SecureRandom secureRandom = new SecureRandom();
-        TlsCrypto crypto = new BcTlsCrypto(secureRandom);
+                         CertCredentials certCredentials) throws IOException {
+        installBouncyCastleProvider();
 
-        int[] srtpProfiles = new int[]{
-            SRTPProtectionProfile.SRTP_AES128_CM_HMAC_SHA1_80
-        };
-        UseSRTPData srtpData = new UseSRTPData(srtpProfiles, new byte[0]);
+        TlsCrypto crypto;
+        try {
+            crypto = new JcaTlsCryptoProvider().setProvider("BC").create(new SecureRandom());
+        } catch (Exception e) {
+            throw new IOException("Failed to create JCA TLS crypto", e);
+        }
+
+        UseSRTPData srtpData = new UseSRTPData(
+            new int[]{SRTPProtectionProfile.SRTP_AES128_CM_HMAC_SHA1_80},
+            new byte[0]);
+
+        LOG.info("DTLS handshake begin role={}", isServer ? "server" : "client");
 
         if (isServer) {
-            MyTlsServer serverImpl = new MyTlsServer(crypto, srtpData, certCredentials);
+            CertCredentials credentials = certCredentials != null
+                ? certCredentials
+                : safeGenerateCredentials(crypto);
+            MyTlsServer server = new MyTlsServer((JcaTlsCrypto) crypto,
+                credentials.privateKey, credentials.certificate);
             DTLSServerProtocol protocol = new DTLSServerProtocol();
-            this.dtlsTransport = protocol.accept(serverImpl, transport);
-            this.srtpKeyMaterial = serverImpl.getSrtpKeyMaterial();
+            this.dtlsTransport = protocol.accept(server, transport);
+            this.srtpKeyMaterial = server.getSrtpKeyMaterial();
+            LOG.info("DTLS handshake finished role=server");
         } else {
-            MyTlsClient clientImpl = new MyTlsClient(crypto, srtpData);
+            MyTlsClient client = new MyTlsClient(crypto, srtpData);
             DTLSClientProtocol protocol = new DTLSClientProtocol();
-            this.dtlsTransport = protocol.connect(clientImpl, transport);
-            this.srtpKeyMaterial = clientImpl.getSrtpKeyMaterial();
+            this.dtlsTransport = protocol.connect(client, transport);
+            this.srtpKeyMaterial = client.getSrtpKeyMaterial();
+            LOG.info("DTLS handshake finished role=client");
         }
     }
 
@@ -81,14 +90,10 @@ public class DtlsHandshake {
         return srtpKeyMaterial;
     }
 
-    /**
-     * 在指定超时内执行 DTLS 握手。超时未完成则抛出 IOException。
-     * 防止 BC 原生 DTLS 实现无限阻塞。
-     */
     public static DtlsHandshake handshakeWithTimeout(UdpDatagramTransport transport,
-                                                      boolean isServer,
-                                                      CertCredentials certCredentials,
-                                                      long timeoutMs) throws IOException {
+                                                     boolean isServer,
+                                                     CertCredentials certCredentials,
+                                                     long timeoutMs) throws IOException {
         ExecutorService executor = Executors.newSingleThreadExecutor(r -> {
             Thread t = new Thread(r, "dtls-handshake-timeout");
             t.setDaemon(true);
@@ -102,11 +107,13 @@ public class DtlsHandshake {
             try {
                 return future.get(timeoutMs, TimeUnit.MILLISECONDS);
             } catch (TimeoutException e) {
-                future.cancel(true); // 尝试中断
+                future.cancel(true);
                 throw new IOException("DTLS handshake timed out after " + timeoutMs + "ms");
             } catch (ExecutionException e) {
                 Throwable cause = e.getCause();
-                if (cause instanceof IOException) throw (IOException) cause;
+                if (cause instanceof IOException) {
+                    throw (IOException) cause;
+                }
                 throw new IOException("DTLS handshake failed: " + cause.getMessage(), cause);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -119,75 +126,76 @@ public class DtlsHandshake {
 
     public void close() {
         if (dtlsTransport != null) {
-            try { dtlsTransport.close(); } catch (IOException e) { /* ignore */ }
+            try {
+                dtlsTransport.close();
+            } catch (IOException ignore) {
+                // ignore
+            }
         }
     }
 
-    // ---- 证书生成 + 指纹工具 ----
+    private static CertCredentials safeGenerateCredentials(TlsCrypto crypto) throws IOException {
+        try {
+            return generateSelfSignedCert(crypto);
+        } catch (Exception e) {
+            throw new IOException("Failed to generate self-signed DTLS certificate", e);
+        }
+    }
 
-    /**
-     * Container for pre-generated certificate + private key.
-     */
+    private static void installBouncyCastleProvider() {
+        if (Security.getProvider("BC") == null) {
+            Security.addProvider(new BouncyCastleProvider());
+        }
+    }
+
     public static class CertCredentials {
         public final org.bouncycastle.tls.Certificate certificate;
-        public final AsymmetricKeyParameter privateKey;
+        public final PrivateKey privateKey;
 
         public CertCredentials(org.bouncycastle.tls.Certificate certificate,
-                                AsymmetricKeyParameter privateKey) {
+                               PrivateKey privateKey) {
             this.certificate = certificate;
             this.privateKey = privateKey;
         }
 
         TlsCredentialedSigner createSigner(TlsCrypto crypto, TlsContext context) {
-            TlsCryptoParameters params = new TlsCryptoParameters(context);
-            return new BcDefaultTlsCredentialedSigner(params, (BcTlsCrypto) crypto, privateKey, certificate,
-                new SignatureAndHashAlgorithm(HashAlgorithm.sha256, SignatureAlgorithm.rsa));
+            SignatureAndHashAlgorithm sigAlg = new SignatureAndHashAlgorithm(
+                HashAlgorithm.sha256, SignatureAlgorithm.rsa);
+            return new JcaDefaultTlsCredentialedSigner(
+                new TlsCryptoParameters(context),
+                (JcaTlsCrypto) crypto,
+                privateKey,
+                certificate,
+                sigAlg);
         }
     }
 
-    /**
-     * Generate a self-signed RSA-2048 certificate + private key.
-     */
     public static CertCredentials generateSelfSignedCert(TlsCrypto crypto) throws Exception {
-        KeyPairGenerator kpg = KeyPairGenerator.getInstance("RSA");
-        kpg.initialize(2048, crypto.getSecureRandom());
-        KeyPair kp = kpg.generateKeyPair();
-
-        X500Name name = new X500Name("CN=webrtc-java");
-        long now = System.currentTimeMillis();
-        JcaX509v3CertificateBuilder certBuilder = new JcaX509v3CertificateBuilder(
-            name, BigInteger.valueOf(now),
-            new Date(now - 86400000L), new Date(now + 365 * 86400000L),
-            name, kp.getPublic());
-
-        ContentSigner signer = new JcaContentSignerBuilder("SHA256WithRSA")
-            .build(kp.getPrivate());
-        X509CertificateHolder certHolder = certBuilder.build(signer);
-
-        BcTlsCertificate tlsCert = new BcTlsCertificate((BcTlsCrypto) crypto, certHolder.getEncoded());
-        org.bouncycastle.tls.Certificate bcCert = new org.bouncycastle.tls.Certificate(
-            new TlsCertificate[]{ tlsCert });
-
-        AsymmetricKeyParameter bcPrivateKey = PrivateKeyFactory.createKey(kp.getPrivate().getEncoded());
-        return new CertCredentials(bcCert, bcPrivateKey);
+        SelfSignedCertificate cert = new SelfSignedCertificate("media-server-webrtc");
+        try {
+            JcaTlsCrypto jcaCrypto = (JcaTlsCrypto) crypto;
+            TlsCertificate tlsCert = jcaCrypto.createCertificate(cert.cert().getEncoded());
+            org.bouncycastle.tls.Certificate chain = new org.bouncycastle.tls.Certificate(
+                new TlsCertificate[]{tlsCert});
+            return new CertCredentials(chain, cert.key());
+        } finally {
+            cert.delete();
+        }
     }
 
-    /**
-     * Compute the SHA-256 fingerprint string (colons-separated uppercase hex) from CertCredentials.
-     */
     public static String computeFingerprint(CertCredentials creds) throws Exception {
         byte[] der = creds.certificate.getCertificateAt(0).getEncoded();
         MessageDigest md = MessageDigest.getInstance("SHA-256");
         byte[] hash = md.digest(der);
         StringBuilder sb = new StringBuilder(hash.length * 3 - 1);
         for (int i = 0; i < hash.length; i++) {
-            if (i > 0) sb.append(':');
+            if (i > 0) {
+                sb.append(':');
+            }
             sb.append(String.format("%02X", hash[i]));
         }
         return sb.toString();
     }
-
-    // ---- BC DTLS 实现类 ----
 
     private static class MyTlsClient extends DefaultTlsClient {
         private final UseSRTPData srtpData;
@@ -207,12 +215,12 @@ public class DtlsHandshake {
 
         @Override
         public ProtocolVersion[] getProtocolVersions() {
-            return new ProtocolVersion[]{ ProtocolVersion.DTLSv12 };
+            return new ProtocolVersion[]{ProtocolVersion.DTLSv12};
         }
 
         @Override
         public int[] getCipherSuites() {
-            return RSA_CIPHER_SUITES;
+            return WEBRTC_CIPHER_SUITES;
         }
 
         @Override
@@ -227,7 +235,7 @@ public class DtlsHandshake {
             return new ServerOnlyTlsAuthentication() {
                 @Override
                 public void notifyServerCertificate(TlsServerCertificate serverCert) {
-                    // 学习项目: 信任所有证书
+                    // Fingerprint validation is handled by signaling.
                 }
             };
         }
@@ -236,8 +244,10 @@ public class DtlsHandshake {
         public void notifyHandshakeComplete() throws IOException {
             super.notifyHandshakeComplete();
             if (tlsContext != null) {
-                this.srtpKeyMaterial = tlsContext.exportKeyingMaterial("EXTRACTOR-dtls_srtp", null, 60);
+                this.srtpKeyMaterial = tlsContext.exportKeyingMaterial(
+                    "EXTRACTOR-dtls_srtp", null, 60);
             }
+            LOG.info("DTLS client handshake complete");
         }
 
         byte[] getSrtpKeyMaterial() {
@@ -245,118 +255,100 @@ public class DtlsHandshake {
         }
     }
 
-    private static class MyTlsServer extends DefaultTlsServer {
-        private final UseSRTPData srtpData;
-        private final CertCredentials certCredentials;
-        private TlsContext tlsContext;
+    private static final class MyTlsServer extends DefaultTlsServer {
+        private final JcaTlsCrypto crypto;
+        private final PrivateKey privateKey;
+        private final org.bouncycastle.tls.Certificate certificate;
+        private boolean clientOfferedSrtpProfile;
         private volatile byte[] srtpKeyMaterial;
 
-        MyTlsServer(TlsCrypto crypto, UseSRTPData srtpData) {
-            this(crypto, srtpData, null);
-        }
-
-        MyTlsServer(TlsCrypto crypto, UseSRTPData srtpData, CertCredentials creds) {
+        MyTlsServer(JcaTlsCrypto crypto, PrivateKey privateKey,
+                    org.bouncycastle.tls.Certificate certificate) {
             super(crypto);
-            this.srtpData = srtpData;
-            this.certCredentials = creds;
+            this.crypto = crypto;
+            this.privateKey = privateKey;
+            this.certificate = certificate;
         }
 
         @Override
-        public void init(TlsServerContext context) {
-            super.init(context);
-            this.tlsContext = context;
+        public ProtocolVersion[] getProtocolVersions() {
+            return new ProtocolVersion[]{ProtocolVersion.DTLSv12};
         }
 
         @Override
-        public ProtocolVersion getServerVersion() {
-            return ProtocolVersion.DTLSv12;
+        protected int[] getSupportedCipherSuites() {
+            return WEBRTC_CIPHER_SUITES;
         }
 
         @Override
-        public int[] getCipherSuites() {
-            return RSA_CIPHER_SUITES;
+        public void processClientExtensions(Hashtable clientExtensions) throws IOException {
+            super.processClientExtensions(clientExtensions);
+            UseSRTPData offered = TlsSRTPUtils.getUseSRTPExtension(clientExtensions);
+            clientOfferedSrtpProfile = hasSrtpAes128Sha1_80(offered);
+            if (!clientOfferedSrtpProfile) {
+                throw new TlsFatalAlert(AlertDescription.illegal_parameter,
+                    "client did not offer required use_srtp profile");
+            }
         }
 
         @Override
         public Hashtable getServerExtensions() throws IOException {
-            Hashtable exts = super.getServerExtensions();
-            TlsSRTPUtils.addUseSRTPExtension(exts, srtpData);
-            return exts;
-        }
-
-        @Override
-        @SuppressWarnings({"rawtypes", "unchecked"})
-        public CertificateRequest getCertificateRequest() throws IOException {
-            short[] certificateTypes = new short[]{
-                ClientCertificateType.rsa_sign,
-                ClientCertificateType.ecdsa_sign
-            };
-            Vector signatureAlgorithms = new Vector();
-            signatureAlgorithms.addElement(new SignatureAndHashAlgorithm(HashAlgorithm.sha256, SignatureAlgorithm.rsa));
-            signatureAlgorithms.addElement(new SignatureAndHashAlgorithm(HashAlgorithm.sha256, SignatureAlgorithm.ecdsa));
-            return new CertificateRequest(certificateTypes, signatureAlgorithms, null);
-        }
-
-        @Override
-        public void notifyClientCertificate(org.bouncycastle.tls.Certificate clientCertificate) throws IOException {
-            // WebRTC peers authenticate the certificate through the SDP fingerprint.
-            // Fingerprint verification is handled by the signaling layer in a later step.
-        }
-
-        @Override
-        protected TlsCredentialedSigner getRSASignerCredentials() throws IOException {
-            try {
-                if (certCredentials != null) {
-                    return certCredentials.createSigner(getCrypto(), tlsContext);
-                }
-                return generateRsaSigner((BcTlsCrypto) getCrypto(), tlsContext);
-            } catch (Exception e) {
-                throw new IOException("Failed to generate RSA signer credentials", e);
+            Hashtable extensions = super.getServerExtensions();
+            if (extensions == null) {
+                extensions = new Hashtable();
             }
+            if (!clientOfferedSrtpProfile) {
+                throw new TlsFatalAlert(AlertDescription.illegal_parameter,
+                    "use_srtp not negotiated");
+            }
+            TlsSRTPUtils.addUseSRTPExtension(
+                extensions,
+                new UseSRTPData(
+                    new int[]{SRTPProtectionProfile.SRTP_AES128_CM_HMAC_SHA1_80},
+                    new byte[0]));
+            return extensions;
+        }
+
+        @Override
+        protected TlsCredentialedSigner getRSASignerCredentials() {
+            SignatureAndHashAlgorithm sigAlg = new SignatureAndHashAlgorithm(
+                HashAlgorithm.sha256, SignatureAlgorithm.rsa);
+            return new JcaDefaultTlsCredentialedSigner(
+                new TlsCryptoParameters(context),
+                crypto,
+                privateKey,
+                certificate,
+                sigAlg);
         }
 
         @Override
         public void notifyHandshakeComplete() throws IOException {
             super.notifyHandshakeComplete();
-            if (tlsContext != null) {
-                this.srtpKeyMaterial = tlsContext.exportKeyingMaterial("EXTRACTOR-dtls_srtp", null, 60);
-            }
+            this.srtpKeyMaterial = context.exportKeyingMaterial(
+                ExporterLabel.dtls_srtp, null, DTLS_SRTP_EXPORTER_LEN);
+            LOG.info("DTLS server handshake complete");
+        }
+
+        @Override
+        public void notifyAlertReceived(short alertLevel, short alertDescription) {
+            LOG.warn("DTLS server alert received level={} desc={}", alertLevel, alertDescription);
         }
 
         byte[] getSrtpKeyMaterial() {
             return srtpKeyMaterial;
         }
-    }
 
-    // ---- 自签名证书生成 (学习用途) ----
-
-    private static TlsCredentialedSigner generateRsaSigner(BcTlsCrypto crypto, TlsContext context) throws Exception {
-        KeyPairGenerator kpg = KeyPairGenerator.getInstance("RSA");
-        kpg.initialize(2048, crypto.getSecureRandom());
-        KeyPair kp = kpg.generateKeyPair();
-
-        X500Name name = new X500Name("CN=webrtc-java");
-        long now = System.currentTimeMillis();
-        JcaX509v3CertificateBuilder certBuilder = new JcaX509v3CertificateBuilder(
-            name,
-            BigInteger.valueOf(now),
-            new Date(now - 86400000L),
-            new Date(now + 365 * 86400000L),
-            name,
-            kp.getPublic());
-
-        ContentSigner signer = new JcaContentSignerBuilder("SHA256WithRSA")
-            .build(kp.getPrivate());
-        X509CertificateHolder certHolder = certBuilder.build(signer);
-
-        BcTlsCertificate tlsCert = new BcTlsCertificate(crypto, certHolder.getEncoded());
-        org.bouncycastle.tls.Certificate bcCert = new org.bouncycastle.tls.Certificate(
-            new TlsCertificate[]{ tlsCert });
-
-        AsymmetricKeyParameter bcPrivateKey = PrivateKeyFactory.createKey(kp.getPrivate().getEncoded());
-
-        TlsCryptoParameters cryptoParams = new TlsCryptoParameters(context);
-        return new BcDefaultTlsCredentialedSigner(cryptoParams, crypto, bcPrivateKey, bcCert,
-            new SignatureAndHashAlgorithm(HashAlgorithm.sha256, SignatureAlgorithm.rsa));
+        private static boolean hasSrtpAes128Sha1_80(UseSRTPData srtp) {
+            if (srtp == null || srtp.getProtectionProfiles() == null) {
+                return false;
+            }
+            int[] profiles = srtp.getProtectionProfiles();
+            for (int profile : profiles) {
+                if (profile == SRTPProtectionProfile.SRTP_AES128_CM_HMAC_SHA1_80) {
+                    return true;
+                }
+            }
+            return false;
+        }
     }
 }

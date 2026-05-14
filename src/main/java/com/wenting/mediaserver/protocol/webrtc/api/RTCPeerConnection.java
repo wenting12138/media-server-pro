@@ -5,6 +5,7 @@ import com.wenting.mediaserver.protocol.webrtc.core.dtls.DtlsHandshake;
 import com.wenting.mediaserver.protocol.webrtc.core.dtls.UdpDatagramTransport;
 import com.wenting.mediaserver.protocol.webrtc.core.ice.*;
 import com.wenting.mediaserver.protocol.webrtc.core.sctp.SctpAssociation;
+import org.bouncycastle.tls.CipherSuite;
 import org.bouncycastle.tls.DTLSTransport;
 import com.wenting.mediaserver.protocol.webrtc.core.rtp.RtpPacket;
 import com.wenting.mediaserver.protocol.webrtc.core.sctp.DataChannel;
@@ -25,6 +26,7 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.SocketException;
 import java.security.SecureRandom;
+import java.security.Security;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -158,8 +160,13 @@ public class RTCPeerConnection implements AutoCloseable {
         // Pre-generate DTLS certificate + fingerprint
         try {
             SecureRandom sr = new SecureRandom();
-            org.bouncycastle.tls.crypto.impl.bc.BcTlsCrypto crypto =
-                new org.bouncycastle.tls.crypto.impl.bc.BcTlsCrypto(sr);
+            if (Security.getProvider("BC") == null) {
+                Security.addProvider(new org.bouncycastle.jce.provider.BouncyCastleProvider());
+            }
+            org.bouncycastle.tls.crypto.impl.jcajce.JcaTlsCrypto crypto =
+                new org.bouncycastle.tls.crypto.impl.jcajce.JcaTlsCryptoProvider()
+                    .setProvider("BC")
+                    .create(sr);
             this.certCredentials = DtlsHandshake.generateSelfSignedCert(crypto);
             this.localFingerprint = DtlsHandshake.computeFingerprint(certCredentials);
         } catch (Exception e) {
@@ -735,8 +742,12 @@ public class RTCPeerConnection implements AutoCloseable {
 
         InetSocketAddress remoteAddr = pair.getRemote().getAddress();
 
-        // Determine DTLS roles: offerer (CONTROLLING) = DTLS client
-        boolean isDtlsServer = iceAgent.getRole() == IceAgent.Role.CONTROLLED;
+        // Determine DTLS role primarily from SDP setup, fallback to ICE role.
+        boolean isDtlsServer = resolveDtlsServerRole();
+        LOG.info("Starting DTLS role={} iceRole={} remote={}",
+            isDtlsServer ? "server" : "client",
+            iceAgent.getRole(),
+            remoteAddr);
 
         setConnectionState(ConnectionState.CONNECTING);
 
@@ -769,7 +780,7 @@ public class RTCPeerConnection implements AutoCloseable {
                 // 启动连接健康监控
                 startConnectionMonitor();
             } catch (Exception e) {
-                LOG.warn("DTLS/SCTP setup failed: " + e.getMessage());
+                LOG.warn("DTLS/SCTP setup failed: {}", e.getMessage(), e);
                 // 关闭前已经开始的连接则标记失败，否则忽略
                 if (iceConnectionState == IceConnectionState.CONNECTED
                     || iceConnectionState == IceConnectionState.COMPLETED) {
@@ -1024,6 +1035,77 @@ public class RTCPeerConnection implements AutoCloseable {
         return data.length >= 20
             && data[4] == 0x21 && data[5] == 0x12
             && data[6] == (byte) 0xA4 && data[7] == 0x42;
+    }
+
+    private void logDtlsClientHelloSummary(byte[] data) {
+        try {
+            if (data == null || data.length < 13) {
+                return;
+            }
+            int contentType = data[0] & 0xFF;
+            if (contentType != 22) { // handshake
+                return;
+            }
+            int recordLen = ((data[11] & 0xFF) << 8) | (data[12] & 0xFF);
+            if (13 + recordLen > data.length || recordLen < 12) {
+                return;
+            }
+            int hsType = data[13] & 0xFF;
+            if (hsType != 1) { // client_hello
+                return;
+            }
+            int hsFragLen = ((data[22] & 0xFF) << 16) | ((data[23] & 0xFF) << 8) | (data[24] & 0xFF);
+            int bodyStart = 25;
+            int bodyEnd = Math.min(bodyStart + hsFragLen, data.length);
+            if (bodyEnd - bodyStart < 2 + 32 + 1 + 2 + 1) {
+                return;
+            }
+            int p = bodyStart;
+            p += 2;  // client_version
+            p += 32; // random
+            int sidLen = data[p++] & 0xFF;
+            p += sidLen;
+            if (p + 2 > bodyEnd) return;
+            int csLen = ((data[p] & 0xFF) << 8) | (data[p + 1] & 0xFF);
+            p += 2;
+            if (p + csLen > bodyEnd) return;
+
+            boolean offerEcdsa128Gcm = false;
+            boolean offerEcdsa256Gcm = false;
+            boolean offerEcdsa128Cbc = false;
+            for (int i = 0; i + 1 < csLen; i += 2) {
+                int suite = ((data[p + i] & 0xFF) << 8) | (data[p + i + 1] & 0xFF);
+                if (suite == CipherSuite.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256) offerEcdsa128Gcm = true;
+                if (suite == CipherSuite.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384) offerEcdsa256Gcm = true;
+                if (suite == CipherSuite.TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA) offerEcdsa128Cbc = true;
+            }
+            p += csLen;
+            if (p + 1 > bodyEnd) return;
+            int compLen = data[p++] & 0xFF;
+            p += compLen;
+
+            boolean hasUseSrtp = false;
+            if (p + 2 <= bodyEnd) {
+                int extLen = ((data[p] & 0xFF) << 8) | (data[p + 1] & 0xFF);
+                p += 2;
+                int extEnd = Math.min(p + extLen, bodyEnd);
+                while (p + 4 <= extEnd) {
+                    int extType = ((data[p] & 0xFF) << 8) | (data[p + 1] & 0xFF);
+                    int len = ((data[p + 2] & 0xFF) << 8) | (data[p + 3] & 0xFF);
+                    p += 4;
+                    if (extType == 14) { // use_srtp
+                        hasUseSrtp = true;
+                        break;
+                    }
+                    p += len;
+                }
+            }
+
+            LOG.info("DTLS ClientHello offers ecdsa128gcm={} ecdsa256gcm={} ecdsa128cbc={} use_srtp={}",
+                offerEcdsa128Gcm, offerEcdsa256Gcm, offerEcdsa128Cbc, hasUseSrtp);
+        } catch (Exception ignore) {
+            // diagnostics only
+        }
     }
 
     private void handleStunPacket(byte[] data, InetSocketAddress remote) {
@@ -1356,5 +1438,58 @@ public class RTCPeerConnection implements AutoCloseable {
             chars[i] = CREDENTIAL_CHARS[random.nextInt(CREDENTIAL_CHARS.length)];
         }
         return new String(chars);
+    }
+
+    private boolean resolveDtlsServerRole() {
+        boolean fallback = iceAgent != null && iceAgent.getRole() == IceAgent.Role.CONTROLLED;
+        String localSetup = extractSetupAttribute(localDescription != null ? localDescription.getSdp() : null);
+        if ("passive".equalsIgnoreCase(localSetup)) {
+            return true;
+        }
+        if ("active".equalsIgnoreCase(localSetup)) {
+            return false;
+        }
+        String remoteSetup = extractSetupAttribute(remoteSdp);
+        if ("active".equalsIgnoreCase(remoteSetup)) {
+            return true;
+        }
+        if ("passive".equalsIgnoreCase(remoteSetup)) {
+            return false;
+        }
+        return fallback;
+    }
+
+    private String extractSetupAttribute(String sdpText) {
+        if (sdpText == null || sdpText.trim().isEmpty()) {
+            return null;
+        }
+        try {
+            return extractSetupAttribute(SdpParser.parse(sdpText));
+        } catch (Exception e) {
+            LOG.debug("Failed to parse local SDP for setup attribute: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    private String extractSetupAttribute(SdpDescription sdp) {
+        if (sdp == null) {
+            return null;
+        }
+        for (MediaDescription md : sdp.getMediaDescriptions()) {
+            if (md == null || md.attributes == null) {
+                continue;
+            }
+            for (SdpDescription.Attribute attr : md.attributes) {
+                if ("setup".equals(attr.key) && attr.value != null) {
+                    return attr.value.trim();
+                }
+            }
+        }
+        for (SdpDescription.Attribute attr : sdp.getSessionAttributes()) {
+            if ("setup".equals(attr.key) && attr.value != null) {
+                return attr.value.trim();
+            }
+        }
+        return null;
     }
 }
