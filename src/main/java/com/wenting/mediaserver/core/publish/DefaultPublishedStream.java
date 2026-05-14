@@ -60,6 +60,7 @@ public final class DefaultPublishedStream implements IPublishedStream {
     private final Map<String, PublishedTrackContext> trackContextsByTrackId = new ConcurrentHashMap<String, PublishedTrackContext>();
     private final Map<String, MediaSubscriberAdapter> subscribersBySessionId = new ConcurrentHashMap<String, MediaSubscriberAdapter>();
     private final Map<String, SubscriberPlaybackState> playbackStatesBySessionId = new ConcurrentHashMap<String, SubscriberPlaybackState>();
+    private volatile OrderedRtpPacketObserver orderedRtpPacketObserver;
 
 
     public DefaultPublishedStream(StreamKey key) {
@@ -109,6 +110,10 @@ public final class DefaultPublishedStream implements IPublishedStream {
 
     public int subscriberCount() {
         return subscribersBySessionId.size();
+    }
+
+    public void setOrderedRtpPacketObserver(OrderedRtpPacketObserver orderedRtpPacketObserver) {
+        this.orderedRtpPacketObserver = orderedRtpPacketObserver;
     }
 
     @Override
@@ -181,6 +186,10 @@ public final class DefaultPublishedStream implements IPublishedStream {
         }
         logFirstPacket(packet, trackPacketCount, "RTP");
         logRtpDebug(packet, header);
+        OrderedRtpPacketObserver observer = orderedRtpPacketObserver;
+        if (observer != null) {
+            observer.onOrderedRtpPacket(packet);
+        }
         fanout(packet);
     }
 

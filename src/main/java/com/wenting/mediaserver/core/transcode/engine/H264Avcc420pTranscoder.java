@@ -86,6 +86,10 @@ public final class H264Avcc420pTranscoder implements VideoFrameTranscoder {
             applyCodecConfig(frame.h264CodecConfig());
             return Collections.emptyList();
         }
+        H264CodecConfig codecConfig = frame.h264CodecConfig();
+        if (codecConfig != null) {
+            applyCodecConfig(codecConfig);
+        }
         if (!hasInputParameterSets()) {
             return Collections.emptyList();
         }
@@ -94,10 +98,6 @@ public final class H264Avcc420pTranscoder implements VideoFrameTranscoder {
                 return Collections.emptyList();
             }
             decoderPrimed = true;
-        }
-        H264CodecConfig codecConfig = frame.h264CodecConfig();
-        if (codecConfig != null) {
-            applyCodecConfig(codecConfig);
         }
         byte[] annexb = avccToAnnexb(frame.payload(), frame.keyFrame());
         if (annexb == null || annexb.length == 0) {
@@ -193,10 +193,10 @@ public final class H264Avcc420pTranscoder implements VideoFrameTranscoder {
     }
 
     private boolean containsAvccIdr(byte[] payload) {
-        if (payload == null || payload.length < 6) {
+        if (payload == null || payload.length < 5) {
             return false;
         }
-        int off = 5;
+        int off = 0;
         int end = payload.length;
         int lenSize = nalLengthSize <= 0 ? 4 : nalLengthSize;
         while (off + lenSize <= end) {
@@ -221,7 +221,7 @@ public final class H264Avcc420pTranscoder implements VideoFrameTranscoder {
         if (payload == null || payload.length < 5) {
             return null;
         }
-        int off = 5;
+        int off = 0;
         int end = payload.length;
         byte[] out = new byte[payload.length * 2 + 128];
         int wp = 0;
@@ -435,12 +435,7 @@ public final class H264Avcc420pTranscoder implements VideoFrameTranscoder {
                 pendingSequenceHeaderBytes = sequenceHeaderBytes;
             }
         }
-        ByteBuf out = Unpooled.buffer(total);
-        out.writeByte(key ? 0x17 : 0x27);
-        out.writeByte(0x01);
-        out.writeByte(0x00);
-        out.writeByte(0x00);
-        out.writeByte(0x00);
+        ByteBuf out = Unpooled.buffer(total - 5);
         for (byte[] nalu : keep) {
             out.writeInt(nalu.length);
             out.writeBytes(nalu);
@@ -456,12 +451,7 @@ public final class H264Avcc420pTranscoder implements VideoFrameTranscoder {
         if (spsNalu == null || spsNalu.length < 4 || ppsNalu == null || ppsNalu.length == 0) {
             return null;
         }
-        ByteBuf seq = Unpooled.buffer(5 + 6 + 2 + spsNalu.length + 1 + 2 + ppsNalu.length);
-        seq.writeByte(0x17);
-        seq.writeByte(0x00);
-        seq.writeByte(0x00);
-        seq.writeByte(0x00);
-        seq.writeByte(0x00);
+        ByteBuf seq = Unpooled.buffer(6 + 2 + spsNalu.length + 1 + 2 + ppsNalu.length);
         seq.writeByte(0x01);
         seq.writeByte(spsNalu[1] & 0xFF);
         seq.writeByte(spsNalu[2] & 0xFF);

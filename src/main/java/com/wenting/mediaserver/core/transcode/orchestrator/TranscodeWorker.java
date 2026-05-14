@@ -6,6 +6,7 @@ import com.wenting.mediaserver.core.publish.InboundRtpPacket;
 import com.wenting.mediaserver.core.transcode.canonical.CanonicalVideoFrame;
 import com.wenting.mediaserver.core.transcode.canonical.VideoFrameCanonicalizer;
 import com.wenting.mediaserver.core.transcode.engine.VideoFrameTranscoder;
+import com.wenting.mediaserver.core.transcode.engine.VideoFrameTranscoderFactory;
 import com.wenting.mediaserver.core.transcode.policy.TransformDecision;
 import com.wenting.mediaserver.core.transcode.policy.TranscodeDecisionPolicy;
 import com.wenting.mediaserver.core.transcode.publish.DerivedStreamPublisher;
@@ -26,19 +27,20 @@ final class TranscodeWorker implements Runnable {
     private final StreamKey derivedKey;
     private final DerivedStreamPublisher publisher;
     private final VideoFrameCanonicalizer canonicalizer;
-    private final VideoFrameTranscoder transcoder;
+    private final VideoFrameTranscoderFactory transcoderFactory;
     private final TranscodeDecisionPolicy decisionPolicy;
     private final ArrayBlockingQueue<CanonicalVideoFrame> queue;
     private final AtomicBoolean running = new AtomicBoolean(true);
     private final Thread thread;
     private volatile TransformDecision transformDecision = TransformDecision.PENDING;
+    private volatile VideoFrameTranscoder transcoder;
 
     private TranscodeWorker(
             StreamKey sourceKey,
             StreamKey derivedKey,
             DerivedStreamPublisher publisher,
             VideoFrameCanonicalizer canonicalizer,
-            VideoFrameTranscoder transcoder,
+            VideoFrameTranscoderFactory transcoderFactory,
             TranscodeDecisionPolicy decisionPolicy,
             int queueSize
     ) {
@@ -46,7 +48,7 @@ final class TranscodeWorker implements Runnable {
         this.derivedKey = derivedKey;
         this.publisher = publisher;
         this.canonicalizer = canonicalizer;
-        this.transcoder = transcoder;
+        this.transcoderFactory = transcoderFactory;
         this.decisionPolicy = decisionPolicy;
         this.queue = new ArrayBlockingQueue<CanonicalVideoFrame>(queueSize);
         this.thread = new Thread(this, "stream-transform-" + sourceKey.path().replace('/', '_'));
@@ -58,7 +60,7 @@ final class TranscodeWorker implements Runnable {
             StreamKey derivedKey,
             DerivedStreamPublisher publisher,
             VideoFrameCanonicalizer canonicalizer,
-            VideoFrameTranscoder transcoder,
+            VideoFrameTranscoderFactory transcoderFactory,
             TranscodeDecisionPolicy decisionPolicy,
             int queueSize
     ) {
@@ -67,7 +69,7 @@ final class TranscodeWorker implements Runnable {
                 derivedKey,
                 publisher,
                 canonicalizer,
-                transcoder,
+                transcoderFactory,
                 decisionPolicy,
                 queueSize
         );
@@ -85,7 +87,7 @@ final class TranscodeWorker implements Runnable {
         }
         thread.interrupt();
         canonicalizer.close();
-        transcoder.close();
+        closeTranscoder();
         queue.clear();
         if (publisher != null) {
             publisher.removeStream(derivedKey);
@@ -145,7 +147,11 @@ final class TranscodeWorker implements Runnable {
                     publisher.publish(derivedKey, copyAsDerivedFrame(frame.sourceFrame()));
                     continue;
                 }
-                List<InboundMediaFrame> outputs = transcoder.transcode(frame, derivedKey);
+                VideoFrameTranscoder activeTranscoder = ensureTranscoder();
+                if (activeTranscoder == null) {
+                    continue;
+                }
+                List<InboundMediaFrame> outputs = activeTranscoder.transcode(frame, derivedKey);
                 for (InboundMediaFrame output : outputs) {
                     publisher.publish(derivedKey, output);
                 }
@@ -175,7 +181,34 @@ final class TranscodeWorker implements Runnable {
                 sourceFrame.configFrame(),
                 sourceFrame.outOfBandParameterSetsReady(),
                 sourceFrame.remoteAddress(),
-                sourceFrame.payload()
+            sourceFrame.payload()
         );
+    }
+
+    private VideoFrameTranscoder ensureTranscoder() {
+        VideoFrameTranscoder existing = transcoder;
+        if (existing != null) {
+            return existing;
+        }
+        synchronized (this) {
+            if (transcoder == null && transcoderFactory != null) {
+                transcoder = transcoderFactory.create();
+                log.info("Initialized stream transcoder source={} derived={}", sourceKey, derivedKey);
+            }
+            return transcoder;
+        }
+    }
+
+    private void closeTranscoder() {
+        VideoFrameTranscoder existing = transcoder;
+        if (existing == null) {
+            return;
+        }
+        synchronized (this) {
+            if (transcoder != null) {
+                transcoder.close();
+                transcoder = null;
+            }
+        }
     }
 }

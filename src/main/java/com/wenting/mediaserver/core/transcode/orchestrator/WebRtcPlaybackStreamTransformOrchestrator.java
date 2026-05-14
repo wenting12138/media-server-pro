@@ -10,6 +10,8 @@ import com.wenting.mediaserver.core.transcode.canonical.RtmpAvccH264Canonicalize
 import com.wenting.mediaserver.core.transcode.canonical.RtspRtpH264Canonicalizer;
 import com.wenting.mediaserver.core.transcode.canonical.VideoFrameCanonicalizer;
 import com.wenting.mediaserver.core.transcode.engine.H264Avcc420pTranscoder;
+import com.wenting.mediaserver.core.transcode.engine.VideoFrameTranscoder;
+import com.wenting.mediaserver.core.transcode.engine.VideoFrameTranscoderFactory;
 import com.wenting.mediaserver.core.transcode.policy.WebRtcH264ProfileDecisionPolicy;
 import com.wenting.mediaserver.core.track.ITrack;
 import com.wenting.mediaserver.core.transcode.publish.DefaultDerivedStreamPublisher;
@@ -126,12 +128,18 @@ public final class WebRtcPlaybackStreamTransformOrchestrator implements StreamTr
         if (canonicalizer == null) {
             return null;
         }
+        VideoFrameTranscoderFactory transcoderFactory = new VideoFrameTranscoderFactory() {
+            @Override
+            public VideoFrameTranscoder create() {
+                return new H264Avcc420pTranscoder();
+            }
+        };
         TranscodeWorker created = TranscodeWorker.start(
                 sourceKey,
                 derivedKey,
                 publisher,
                 canonicalizer,
-                new H264Avcc420pTranscoder(),
+                transcoderFactory,
                 new WebRtcH264ProfileDecisionPolicy(),
                 queueSize
         );

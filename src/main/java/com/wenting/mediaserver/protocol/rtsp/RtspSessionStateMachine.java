@@ -462,7 +462,6 @@ public final class RtspSessionStateMachine {
                 Integer.valueOf(packet.channel())
         );
         stream.onInboundRtpPacket(inboundPacket);
-        registry.onPublishedPacket(inboundPacket);
     }
 
     private void recordControlInbound(RtspRequestMessage request) {

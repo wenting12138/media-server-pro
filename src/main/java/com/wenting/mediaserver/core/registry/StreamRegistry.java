@@ -4,6 +4,7 @@ import com.wenting.mediaserver.core.enums.publish.CodecType;
 import com.wenting.mediaserver.core.enums.publish.TrackType;
 import com.wenting.mediaserver.core.track.ITrack;
 import com.wenting.mediaserver.core.model.StreamKey;
+import com.wenting.mediaserver.core.publish.DefaultPublishedStream;
 import com.wenting.mediaserver.core.publish.InboundMediaFrame;
 import com.wenting.mediaserver.core.publish.InboundRtpPacket;
 import com.wenting.mediaserver.core.publish.IPublishedStream;
@@ -57,6 +58,7 @@ public final class StreamRegistry {
         if (key == null || stream == null) {
             throw new IllegalArgumentException("key and stream must not be null");
         }
+        attachOrderedPacketObserver(stream);
         IPublishedStream previous = published.put(key, stream);
         StreamTransformOrchestrator manager = streamTransformOrchestrator;
         if (manager != null) {
@@ -124,6 +126,9 @@ public final class StreamRegistry {
 
     public void setStreamTransformOrchestrator(StreamTransformOrchestrator streamTransformOrchestrator) {
         this.streamTransformOrchestrator = streamTransformOrchestrator;
+        for (IPublishedStream stream : published.values()) {
+            attachOrderedPacketObserver(stream);
+        }
     }
 
     public String webRtcPlaybackSuffix() {
@@ -186,7 +191,16 @@ public final class StreamRegistry {
                 null
         );
         stream.onInboundRtpPacket(packet);
-        onPublishedPacket(packet);
+    }
+
+    private void attachOrderedPacketObserver(IPublishedStream stream) {
+        if (!(stream instanceof DefaultPublishedStream)) {
+            return;
+        }
+        StreamTransformOrchestrator manager = streamTransformOrchestrator;
+        ((DefaultPublishedStream) stream).setOrderedRtpPacketObserver(
+                manager == null ? null : manager::onPacket
+        );
     }
 
     private ITrack resolveTrack(String sessionId, String trackId) {
