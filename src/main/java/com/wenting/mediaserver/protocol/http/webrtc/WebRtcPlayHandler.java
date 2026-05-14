@@ -29,6 +29,7 @@ import org.slf4j.LoggerFactory;
 
 import java.net.InetSocketAddress;
 import java.util.UUID;
+import java.util.function.Consumer;
 
 /**
  * Minimal server-side WebRTC play signaling endpoint.
@@ -82,6 +83,7 @@ public final class WebRtcPlayHandler implements HttpRequestHandler {
 
         SessionDatagramIo datagramIo = new SessionDatagramIo(localUdpAddress, datagramSender);
         RTCPeerConnection peerConnection = new RTCPeerConnection(datagramIo);
+        ServerWebRtcPeerSession session = null;
         boolean success = false;
         try {
             RTCSessionDescription offer = new RTCSessionDescription("offer", offerSdp);
@@ -92,22 +94,87 @@ public final class WebRtcPlayHandler implements HttpRequestHandler {
             log.info("coming  offer: \r\n{}",  offer.getSdp());
             log.info("create answer: \r\n{}", answer.getSdp());
 
-            ServerWebRtcPeerSession session = new ServerWebRtcPeerSession(
+            session = new ServerWebRtcPeerSession(
                     UUID.randomUUID().toString(),
                     new StreamKey(stream.getProtocol(), app, streamName),
                     peerConnection,
                     datagramIo
             );
+            installLifecycleCleanup(session);
             session.attachPublishedStream(stream);
             sessionManager.register(session);
 
-            String body = OBJECT_MAPPER.writeValueAsString(new PlayResponse(0, "success", new PlayResponseData(answer.getType(), answer.getSdp())));
+            String body = OBJECT_MAPPER.writeValueAsString(new PlayResponse(
+                    0,
+                    "success",
+                    new PlayResponseData(session.sessionId(), answer.getType(), answer.getSdp())
+            ));
             writeJson(ctx, HttpResponseStatus.OK, body);
             success = true;
         } finally {
             if (!success) {
-                peerConnection.close();
+                if (session != null) {
+                    closeManagedSession(session);
+                } else {
+                    peerConnection.close();
+                    datagramIo.close();
+                }
             }
+        }
+    }
+
+    private void installLifecycleCleanup(ServerWebRtcPeerSession session) {
+        RTCPeerConnection peerConnection = session.peerConnection();
+        Consumer<RTCPeerConnection.ConnectionState> previousConnectionHandler = peerConnection.onConnectionStateChange;
+        peerConnection.onConnectionStateChange = state -> {
+            invokeConnectionHandler(previousConnectionHandler, state);
+            if (state == RTCPeerConnection.ConnectionState.FAILED
+                    || state == RTCPeerConnection.ConnectionState.CLOSED) {
+                closeManagedSession(session);
+            }
+        };
+        Consumer<RTCPeerConnection.IceConnectionState> previousIceHandler = peerConnection.onIceConnectionStateChange;
+        peerConnection.onIceConnectionStateChange = state -> {
+            invokeIceHandler(previousIceHandler, state);
+            if (state == RTCPeerConnection.IceConnectionState.FAILED
+                    || state == RTCPeerConnection.IceConnectionState.CLOSED) {
+                closeManagedSession(session);
+            }
+        };
+    }
+
+    private void closeManagedSession(ServerWebRtcPeerSession session) {
+        ServerWebRtcPeerSession removed = sessionManager.removeAndClose(session.sessionId());
+        if (removed == null) {
+            session.close();
+        }
+    }
+
+    private void invokeConnectionHandler(
+            Consumer<RTCPeerConnection.ConnectionState> handler,
+            RTCPeerConnection.ConnectionState state
+    ) {
+        if (handler == null) {
+            return;
+        }
+        try {
+            handler.accept(state);
+        } catch (RuntimeException e) {
+            log.warn("WebRTC connection-state callback failed: {}", e.getMessage(), e);
+        }
+    }
+
+    private void invokeIceHandler(
+            Consumer<RTCPeerConnection.IceConnectionState> handler,
+            RTCPeerConnection.IceConnectionState state
+    ) {
+        if (handler == null) {
+            return;
+        }
+        try {
+            handler.accept(state);
+        } catch (RuntimeException e) {
+            log.warn("WebRTC ICE-state callback failed: {}", e.getMessage(), e);
         }
     }
 
@@ -182,10 +249,12 @@ public final class WebRtcPlayHandler implements HttpRequestHandler {
     }
 
     private static final class PlayResponseData {
+        public final String sessionId;
         public final String type;
         public final String sdp;
 
-        private PlayResponseData(String type, String sdp) {
+        private PlayResponseData(String sessionId, String type, String sdp) {
+            this.sessionId = sessionId;
             this.type = type;
             this.sdp = sdp;
         }

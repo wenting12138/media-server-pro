@@ -56,6 +56,14 @@ public final class WebRtcSessionManager implements AutoCloseable {
         return removed;
     }
 
+    public ServerWebRtcPeerSession removeAndClose(String sessionId) {
+        ServerWebRtcPeerSession removed = remove(sessionId);
+        if (removed != null) {
+            removed.close();
+        }
+        return removed;
+    }
+
     public void bindRemoteAddress(ServerWebRtcPeerSession session, InetSocketAddress remoteAddress) {
         if (session == null || remoteAddress == null) {
             return;
@@ -77,13 +85,10 @@ public final class WebRtcSessionManager implements AutoCloseable {
 
     @Override
     public void close() {
-        for (ServerWebRtcPeerSession session : sessionsById.values()) {
+        for (ServerWebRtcPeerSession session : new LinkedHashMap<String, ServerWebRtcPeerSession>(sessionsById).values()) {
             if (session != null) {
-                session.close();
+                removeAndClose(session.sessionId());
             }
         }
-        sessionsById.clear();
-        sessionsByLocalUfrag.clear();
-        sessionsByRemoteAddress.clear();
     }
 }

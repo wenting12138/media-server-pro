@@ -117,7 +117,9 @@ public class RTCPeerConnection implements AutoCloseable {
     // ---- 连接监控 ----
     private static final long DTLS_HANDSHAKE_TIMEOUT_MS = 30000;
     private static final long CONNECTION_MONITOR_INTERVAL_MS = 10000;
+    private static final long INBOUND_ACTIVITY_TIMEOUT_MS = 35000;
     private volatile boolean connectionMonitorStarted = false;
+    private volatile long lastInboundActivityAtMs = System.currentTimeMillis();
     private final ScheduledExecutorService connectionMonitor =
         Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "pc-monitor");
@@ -803,12 +805,33 @@ public class RTCPeerConnection implements AutoCloseable {
      * 连接健康监控 — 定期检查 DTLS/SCTP 是否仍活跃。
      * 如果检测到连接断开，触发 ConnectionState.FAILED。
      */
+    void checkConnectionHealthNow() {
+        if (connectionState == ConnectionState.CLOSED
+            || connectionState == ConnectionState.FAILED) {
+            return;
+        }
+
+        long idleMs = System.currentTimeMillis() - lastInboundActivityAtMs;
+        if ((iceConnectionState == IceConnectionState.CONNECTED
+                || iceConnectionState == IceConnectionState.COMPLETED
+                || connectionState == ConnectionState.CONNECTED)
+            && idleMs > INBOUND_ACTIVITY_TIMEOUT_MS) {
+            LOG.warn("Connection monitor: no inbound packets for {}ms, marking connection failed",
+                idleMs);
+            if (iceConnectionState != IceConnectionState.CLOSED) {
+                setIceState(IceConnectionState.FAILED);
+            }
+            setConnectionState(ConnectionState.FAILED);
+        }
+    }
+
     private synchronized void startConnectionMonitor() {
         if (connectionMonitorStarted) return;
         connectionMonitorStarted = true;
 
         connectionMonitor.scheduleAtFixedRate(() -> {
             try {
+                checkConnectionHealthNow();
                 if (connectionState == ConnectionState.CLOSED
                     || connectionState == ConnectionState.FAILED) {
                     return;
@@ -989,6 +1012,10 @@ public class RTCPeerConnection implements AutoCloseable {
 
     private void setupPacketHandler() {
         transport.setPacketHandler((data, remote) -> {
+            if (data == null || data.length == 0) {
+                return;
+            }
+            noteInboundActivity();
             if (isStunPacket(data)) {
                 handleStunPacket(data, remote);
             } else if (isDtlsPacket(data)) {
@@ -1002,6 +1029,10 @@ public class RTCPeerConnection implements AutoCloseable {
                 handleRtpPacket(data, remote);
             }
         });
+    }
+
+    private void noteInboundActivity() {
+        lastInboundActivityAtMs = System.currentTimeMillis();
     }
 
     private static boolean isDtlsPacket(byte[] data) {

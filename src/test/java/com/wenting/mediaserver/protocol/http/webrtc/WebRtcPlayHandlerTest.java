@@ -7,6 +7,7 @@ import com.wenting.mediaserver.core.model.StreamKey;
 import com.wenting.mediaserver.core.publish.DefaultPublishedStream;
 import com.wenting.mediaserver.core.registry.StreamRegistry;
 import com.wenting.mediaserver.protocol.http.HttpRouterHandler;
+import com.wenting.mediaserver.protocol.webrtc.ServerWebRtcPeerSession;
 import com.wenting.mediaserver.protocol.webrtc.WebRtcSessionManager;
 import com.wenting.mediaserver.protocol.webrtc.transport.DatagramIoSender;
 import io.netty.channel.embedded.EmbeddedChannel;
@@ -50,6 +51,7 @@ class WebRtcPlayHandlerTest {
         JsonNode root = objectMapper.readTree(response.content().toString(CharsetUtil.UTF_8));
         assertEquals(0, root.get("code").asInt());
         assertEquals("answer", root.get("data").get("type").asText());
+        assertTrue(root.get("data").hasNonNull("sessionId"));
         String answerSdp = root.get("data").get("sdp").asText();
         assertTrue(answerSdp.contains("m=video"));
         assertTrue(!answerSdp.contains("m=application"));
@@ -89,6 +91,39 @@ class WebRtcPlayHandlerTest {
         assertEquals(404, response.status().code());
         response.release();
         channel.finishAndReleaseAll();
+    }
+
+    @Test
+    void shouldRemoveSubscriberWhenPeerConnectionCloses() throws Exception {
+        StreamRegistry registry = new StreamRegistry();
+        StreamKey streamKey = new StreamKey(StreamProtocol.RTMP, "live", "cam01");
+        DefaultPublishedStream publishedStream = new DefaultPublishedStream(streamKey);
+        registry.registerPublishedStream(streamKey, publishedStream);
+        WebRtcSessionManager sessionManager = new WebRtcSessionManager();
+        EmbeddedChannel channel = new EmbeddedChannel(
+                new HttpRouterHandler(new WebRtcPlayHandler(
+                        registry,
+                        sessionManager,
+                        new InetSocketAddress("192.168.3.52", 18081),
+                        new NoopDatagramIoSender()
+                ))
+        );
+
+        channel.writeInbound(request("{\"app\":\"live\",\"stream\":\"cam01\",\"sdp\":\"" + escapeJson(offerWithH264()) + "\"}"));
+
+        FullHttpResponse response = channel.readOutbound();
+        assertEquals(200, response.status().code());
+        assertEquals(1, sessionManager.count());
+        assertEquals(1, publishedStream.subscriberCount());
+
+        ServerWebRtcPeerSession session = sessionManager.sessions().iterator().next();
+        session.peerConnection().close();
+
+        assertEquals(0, sessionManager.count());
+        assertEquals(0, publishedStream.subscriberCount());
+        response.release();
+        channel.finishAndReleaseAll();
+        sessionManager.close();
     }
 
     @Test

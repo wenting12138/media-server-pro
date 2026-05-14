@@ -58,12 +58,29 @@ class HttpRouterHandlerTest {
     void shouldDispatchToExactWebRtcPlayRoute() {
         RecordingHandler testPage = new RecordingHandler("/webrtc/test");
         RecordingHandler play = new RecordingHandler("/webrtc/play");
-        EmbeddedChannel channel = new EmbeddedChannel(new HttpRouterHandler(testPage, play));
+        RecordingHandler stop = new RecordingHandler("/webrtc/stop");
+        EmbeddedChannel channel = new EmbeddedChannel(new HttpRouterHandler(testPage, play, stop));
 
         channel.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.POST, "/webrtc/play"));
 
         assertEquals(0, testPage.callCount);
         assertEquals(1, play.callCount);
+        assertEquals(0, stop.callCount);
+        channel.finishAndReleaseAll();
+    }
+
+    @Test
+    void shouldDispatchToExactWebRtcStopRoute() {
+        RecordingHandler testPage = new RecordingHandler("/webrtc/test");
+        RecordingHandler play = new RecordingHandler("/webrtc/play");
+        RecordingHandler stop = new RecordingHandler("/webrtc/stop");
+        EmbeddedChannel channel = new EmbeddedChannel(new HttpRouterHandler(testPage, play, stop));
+
+        channel.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.POST, "/webrtc/stop"));
+
+        assertEquals(0, testPage.callCount);
+        assertEquals(0, play.callCount);
+        assertEquals(1, stop.callCount);
         channel.finishAndReleaseAll();
     }
 

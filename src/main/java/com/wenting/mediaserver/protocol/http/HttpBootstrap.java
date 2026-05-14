@@ -2,6 +2,7 @@ package com.wenting.mediaserver.protocol.http;
 
 import com.wenting.mediaserver.protocol.http.api.HttpJsonApiHandler;
 import com.wenting.mediaserver.protocol.http.webrtc.WebRtcPlayHandler;
+import com.wenting.mediaserver.protocol.http.webrtc.WebRtcStopHandler;
 import com.wenting.mediaserver.protocol.http.webrtc.WebRtcTestPageHandler;
 import com.wenting.mediaserver.bootstrap.IServerBootstrap;
 import com.wenting.mediaserver.config.MediaServerConfig;
@@ -82,6 +83,7 @@ public class HttpBootstrap implements IServerBootstrap {
                         ch.pipeline().addLast(new ChunkedWriteHandler());
                         ch.pipeline().addLast(new HttpRouterHandler(
                                 webRtcPlayHandler,
+                                new WebRtcStopHandler(HttpBootstrap.this.webRtcSessionManager),
                                 new WebRtcTestPageHandler(),
                                 new HlsHandler(registry, hlsSessionManager),
                                 new HttpFlvHandler(registry),

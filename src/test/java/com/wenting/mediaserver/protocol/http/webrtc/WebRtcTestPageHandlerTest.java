@@ -23,8 +23,9 @@ class WebRtcTestPageHandlerTest {
         assertEquals(200, response.status().code());
         assertEquals("text/html; charset=UTF-8", response.headers().get("Content-Type"));
         String body = response.content().toString(CharsetUtil.UTF_8);
-        assertTrue(body.contains("WebRTC 拉流测试"));
         assertTrue(body.contains("/webrtc/play"));
+        assertTrue(body.contains("/webrtc/stop"));
+        assertTrue(body.contains("sessionId"));
         assertTrue(body.contains("RTCPeerConnection"));
         response.release();
         channel.finishAndReleaseAll();

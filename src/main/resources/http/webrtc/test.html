@@ -44,6 +44,7 @@
   </div>
   <script>
     let pc = null;
+    let currentSessionId = null;
     const video = document.getElementById("video");
     const logBox = document.getElementById("log");
     const log = (...args) => {
@@ -53,12 +54,27 @@
       console.log(...args);
     };
     const stop = async () => {
+      const sessionId = currentSessionId;
+      currentSessionId = null;
       if (pc) {
         pc.getSenders().forEach(sender => sender.track && sender.track.stop && sender.track.stop());
         pc.close();
         pc = null;
       }
       video.srcObject = null;
+      if (sessionId) {
+        try {
+          const response = await fetch("/webrtc/stop", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sessionId })
+          });
+          const json = await response.json();
+          log("stop response", json);
+        } catch (error) {
+          log("stop request failed", error && error.message ? error.message : String(error));
+        }
+      }
       log("peer connection stopped");
     };
     document.getElementById("stop").addEventListener("click", () => { stop(); });
@@ -92,9 +108,10 @@
       });
       const json = await response.json();
       log("play response", json);
-      if (!response.ok || !json || json.code !== 0 || !json.data || !json.data.sdp) {
+      if (!response.ok || !json || json.code !== 0 || !json.data || !json.data.sdp || !json.data.sessionId) {
         throw new Error("play request failed");
       }
+      currentSessionId = json.data.sessionId;
       await pc.setRemoteDescription({ type: "answer", sdp: json.data.sdp });
       log("remote answer set");
     });
