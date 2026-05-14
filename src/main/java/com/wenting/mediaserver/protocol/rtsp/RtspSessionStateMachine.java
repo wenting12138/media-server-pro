@@ -439,7 +439,7 @@ public final class RtspSessionStateMachine {
         boolean isRtcp = transport.interleavedRtcpChannel() != null
                 && transport.interleavedRtcpChannel().intValue() == packet.channel();
         ITrack track = session.findTrack(trackId);
-        stream.onInboundRtpPacket(new InboundRtpPacket(
+        InboundRtpPacket inboundPacket = new InboundRtpPacket(
                 new InboundMediaFrame(
                         StreamProtocol.RTSP,
                         track == null ? TrackType.UNKNOWN : track.trackType(),
@@ -460,7 +460,9 @@ public final class RtspSessionStateMachine {
                 MediaPacketTransport.TCP_INTERLEAVED,
                 null,
                 Integer.valueOf(packet.channel())
-        ));
+        );
+        stream.onInboundRtpPacket(inboundPacket);
+        registry.onPublishedPacket(inboundPacket);
     }
 
     private void recordControlInbound(RtspRequestMessage request) {

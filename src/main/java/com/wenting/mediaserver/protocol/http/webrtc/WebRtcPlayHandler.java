@@ -74,7 +74,7 @@ public final class WebRtcPlayHandler implements HttpRequestHandler {
             writeJson(ctx, HttpResponseStatus.BAD_REQUEST, "{\"code\":-1,\"msg\":\"missing app/stream/sdp\"}");
             return;
         }
-        IPublishedStream stream = registry.findPublishedStreamByPath(app, streamName);
+        IPublishedStream stream = registry.findPublishedStreamForWebRtcPlayback(app, streamName);
         if (stream == null) {
             writeJson(ctx, HttpResponseStatus.NOT_FOUND, "{\"code\":-1,\"msg\":\"stream not found\"}");
             return;

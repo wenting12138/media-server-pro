@@ -8,6 +8,7 @@ import com.wenting.mediaserver.core.publish.InboundMediaFrame;
 import com.wenting.mediaserver.core.publish.InboundRtpPacket;
 import com.wenting.mediaserver.core.publish.IPublishedStream;
 import com.wenting.mediaserver.core.enums.publish.MediaPacketTransport;
+import com.wenting.mediaserver.core.transcode.orchestrator.StreamTransformOrchestrator;
 import com.wenting.mediaserver.protocol.rtsp.RtspSession;
 import com.wenting.mediaserver.protocol.rtsp.RtspSessionManager;
 import io.netty.buffer.ByteBufUtil;
@@ -29,24 +30,39 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class StreamRegistry {
 
     private static final Logger log = LoggerFactory.getLogger(StreamRegistry.class);
+    private static final String DEFAULT_WEBRTC_PLAYBACK_SUFFIX = "__webrtc";
 
     private final RtspSessionManager sessionManager;
     private final Map<StreamKey, IPublishedStream> published = new ConcurrentHashMap<StreamKey, IPublishedStream>();
     private final Map<Integer, RtspUdpBinding> udpPortBindings = new ConcurrentHashMap<Integer, RtspUdpBinding>();
+    private final String webRtcPlaybackSuffix;
+    private volatile StreamTransformOrchestrator streamTransformOrchestrator;
 
     public StreamRegistry() {
         this(new RtspSessionManager());
     }
 
     public StreamRegistry(RtspSessionManager sessionManager) {
+        this(sessionManager, DEFAULT_WEBRTC_PLAYBACK_SUFFIX);
+    }
+
+    public StreamRegistry(RtspSessionManager sessionManager, String webRtcPlaybackSuffix) {
         this.sessionManager = sessionManager == null ? new RtspSessionManager() : sessionManager;
+        this.webRtcPlaybackSuffix = webRtcPlaybackSuffix == null || webRtcPlaybackSuffix.trim().isEmpty()
+                ? DEFAULT_WEBRTC_PLAYBACK_SUFFIX
+                : webRtcPlaybackSuffix.trim();
     }
 
     public IPublishedStream registerPublishedStream(StreamKey key, IPublishedStream stream) {
         if (key == null || stream == null) {
             throw new IllegalArgumentException("key and stream must not be null");
         }
-        return published.put(key, stream);
+        IPublishedStream previous = published.put(key, stream);
+        StreamTransformOrchestrator manager = streamTransformOrchestrator;
+        if (manager != null) {
+            manager.onStreamRegistered(key);
+        }
+        return previous;
     }
 
     public IPublishedStream findPublishedStream(StreamKey key) {
@@ -68,6 +84,14 @@ public final class StreamRegistry {
         return null;
     }
 
+    public IPublishedStream findPublishedStreamForWebRtcPlayback(String app, String stream) {
+        if (app == null || app.trim().isEmpty() || stream == null || stream.trim().isEmpty()) {
+            return null;
+        }
+        IPublishedStream derived = findPublishedStreamByPath(app, stream + webRtcPlaybackSuffix);
+        return derived == null ? findPublishedStreamByPath(app, stream) : derived;
+    }
+
     public Map<StreamKey, IPublishedStream> publishedStreamsSnapshot() {
         return Collections.unmodifiableMap(new LinkedHashMap<StreamKey, IPublishedStream>(published));
     }
@@ -76,7 +100,34 @@ public final class StreamRegistry {
         if (key == null) {
             return null;
         }
-        return published.remove(key);
+        IPublishedStream removed = published.remove(key);
+        StreamTransformOrchestrator manager = streamTransformOrchestrator;
+        if (manager != null) {
+            manager.onStreamRemoved(key);
+        }
+        return removed;
+    }
+
+    public void onPublishedFrame(InboundMediaFrame frame) {
+        StreamTransformOrchestrator manager = streamTransformOrchestrator;
+        if (manager != null) {
+            manager.onFrame(frame);
+        }
+    }
+
+    public void onPublishedPacket(InboundRtpPacket packet) {
+        StreamTransformOrchestrator manager = streamTransformOrchestrator;
+        if (manager != null) {
+            manager.onPacket(packet);
+        }
+    }
+
+    public void setStreamTransformOrchestrator(StreamTransformOrchestrator streamTransformOrchestrator) {
+        this.streamTransformOrchestrator = streamTransformOrchestrator;
+    }
+
+    public String webRtcPlaybackSuffix() {
+        return webRtcPlaybackSuffix;
     }
 
     public void bindUdpPort(int localPort, RtspUdpBinding binding) {
@@ -112,7 +163,7 @@ public final class StreamRegistry {
             return;
         }
         ITrack track = resolveTrack(binding.sessionId(), binding.trackId());
-        stream.onInboundRtpPacket(new InboundRtpPacket(
+        InboundRtpPacket packet = new InboundRtpPacket(
                 new InboundMediaFrame(
                         stream.getProtocol(),
                         track == null ? TrackType.UNKNOWN : track.trackType(),
@@ -133,7 +184,9 @@ public final class StreamRegistry {
                 MediaPacketTransport.UDP,
                 Integer.valueOf(localPort),
                 null
-        ));
+        );
+        stream.onInboundRtpPacket(packet);
+        onPublishedPacket(packet);
     }
 
     private ITrack resolveTrack(String sessionId, String trackId) {

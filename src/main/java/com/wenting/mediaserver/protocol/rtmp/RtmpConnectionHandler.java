@@ -4,6 +4,7 @@ import com.wenting.mediaserver.core.enums.StreamProtocol;
 import com.wenting.mediaserver.core.model.StreamKey;
 import com.wenting.mediaserver.core.publish.DefaultPublishedStream;
 import com.wenting.mediaserver.core.publish.IPublishedStream;
+import com.wenting.mediaserver.core.publish.InboundMediaFrame;
 import com.wenting.mediaserver.core.registry.StreamRegistry;
 import com.wenting.mediaserver.core.track.ITrack;
 import com.wenting.mediaserver.core.codec.rtmp.RtmpAudioMessage;
@@ -320,9 +321,11 @@ public final class RtmpConnectionHandler extends SimpleChannelInboundHandler<Rtm
         if (publishedStream == null) {
             return;
         }
-        publishedStream.onInboundFrame(
-                videoFrameMapper.map(session(), message, resolveRemoteAddress(ctx))
-        );
+        InboundMediaFrame frame = videoFrameMapper.map(session(), message, resolveRemoteAddress(ctx));
+        publishedStream.onInboundFrame(frame);
+        if (streamRegistry != null) {
+            streamRegistry.onPublishedFrame(frame);
+        }
     }
 
     private void handleAudio(ChannelHandlerContext ctx, RtmpAudioMessage message) {
