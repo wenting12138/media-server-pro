@@ -108,6 +108,9 @@ public class ServerWebRtcPeerSessionTest {
         SessionDatagramIo datagramIo = new SessionDatagramIo(new InetSocketAddress("127.0.0.1", 18081), sender);
         RTCPeerConnection peerConnection = new RTCPeerConnection(datagramIo);
         RTCRtpTransceiver transceiver = peerConnection.addTrack(new MediaStreamTrack(MediaStreamTrack.Kind.VIDEO, "video"));
+        transceiver.setNegotiatedPayloadType(Integer.valueOf(96));
+        transceiver.setNegotiatedClockRate(Integer.valueOf(90000));
+        transceiver.setNegotiatedCodecType(CodecType.H264);
         byte[] keyMaterial = keyMaterial();
         transceiver.getSender().setSrtpContext(SrtpCryptoContext.fromKeyMaterial(keyMaterial, true));
         StreamKey streamKey = new StreamKey(StreamProtocol.RTMP, "live", "cam01");
@@ -144,6 +147,57 @@ public class ServerWebRtcPeerSessionTest {
             assertArrayEquals(new byte[]{0x67, 0x64, 0x00, 0x1F, (byte) 0xAC, (byte) 0xD9, 0x40, 0x78}, spsPacket.getPayload());
             assertArrayEquals(new byte[]{0x68, (byte) 0xEE, 0x3C, (byte) 0x80}, ppsPacket.getPayload());
             assertArrayEquals(new byte[]{0x65, 0x11, 0x22, 0x33}, keyPacket.getPayload());
+        } finally {
+            session.close();
+        }
+    }
+
+    @Test
+    public void shouldPacketizeG711FrameEncryptAndSendSrtpDatagram() throws Exception {
+        RecordingDatagramIoSender sender = new RecordingDatagramIoSender();
+        SessionDatagramIo datagramIo = new SessionDatagramIo(new InetSocketAddress("127.0.0.1", 18081), sender);
+        RTCPeerConnection peerConnection = new RTCPeerConnection(datagramIo);
+        RTCRtpTransceiver transceiver = peerConnection.addTrack(new MediaStreamTrack(MediaStreamTrack.Kind.AUDIO, "audio"));
+        transceiver.setNegotiatedPayloadType(Integer.valueOf(0));
+        transceiver.setNegotiatedClockRate(Integer.valueOf(8000));
+        transceiver.setNegotiatedCodecType(CodecType.G711U);
+        byte[] keyMaterial = keyMaterial();
+        transceiver.getSender().setSrtpContext(SrtpCryptoContext.fromKeyMaterial(keyMaterial, true));
+        StreamKey streamKey = new StreamKey(StreamProtocol.RTMP, "live", "cam01");
+        ServerWebRtcPeerSession session = new ServerWebRtcPeerSession(
+                "sess-4",
+                streamKey,
+                peerConnection,
+                datagramIo
+        );
+        InetSocketAddress remoteAddress = new InetSocketAddress("127.0.0.1", 50002);
+
+        try {
+            session.receive(new byte[0], remoteAddress);
+            byte[] payload = new byte[]{0x11, 0x22, 0x33, 0x44};
+            session.writeInboundFrame(new InboundMediaFrame(
+                    StreamProtocol.RTMP,
+                    TrackType.AUDIO,
+                    CodecType.G711U,
+                    "publisher",
+                    streamKey,
+                    "audio-g711u",
+                    Long.valueOf(20L),
+                    Long.valueOf(20L),
+                    false,
+                    false,
+                    null,
+                    payload
+            ));
+
+            assertEquals(1, sender.sentPackets.size());
+            assertEquals(remoteAddress, sender.sentPackets.get(0).target);
+
+            SrtpTransform decrypt = new SrtpTransform(SrtpCryptoContext.fromKeyMaterial(keyMaterial, true), transceiver.getSender().getSsrc());
+            RtpPacket audioPacket = decrypt.unprotect(sender.sentPackets.get(0).data);
+            assertEquals(0, audioPacket.getPayloadType());
+            assertArrayEquals(payload, audioPacket.getPayload());
+            assertTrue(audioPacket.getMarker());
         } finally {
             session.close();
         }

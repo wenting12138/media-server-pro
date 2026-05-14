@@ -94,6 +94,37 @@ class WebRtcPlayHandlerTest {
     }
 
     @Test
+    void shouldPreferPcmuWhenOfferContainsAudio() throws Exception {
+        StreamRegistry registry = new StreamRegistry();
+        StreamKey streamKey = new StreamKey(StreamProtocol.RTMP, "live", "cam01");
+        DefaultPublishedStream publishedStream = new DefaultPublishedStream(streamKey);
+        registry.registerPublishedStream(streamKey, publishedStream);
+        WebRtcSessionManager sessionManager = new WebRtcSessionManager();
+        EmbeddedChannel channel = new EmbeddedChannel(
+                new HttpRouterHandler(new WebRtcPlayHandler(
+                        registry,
+                        sessionManager,
+                        new InetSocketAddress("192.168.3.52", 18081),
+                        new NoopDatagramIoSender()
+                ))
+        );
+
+        channel.writeInbound(request("{\"app\":\"live\",\"stream\":\"cam01\",\"sdp\":\"" + escapeJson(offerWithAudioAndH264()) + "\"}"));
+
+        FullHttpResponse response = channel.readOutbound();
+        assertEquals(200, response.status().code());
+        JsonNode root = objectMapper.readTree(response.content().toString(CharsetUtil.UTF_8));
+        String answerSdp = root.get("data").get("sdp").asText();
+        assertTrue(answerSdp.contains("m=audio 9 UDP/TLS/RTP/SAVPF 0"));
+        assertTrue(answerSdp.contains("a=rtpmap:0 PCMU/8000"));
+        assertTrue(answerSdp.contains("a=msid:0 webrtc-audio-cam01"));
+        assertTrue(answerSdp.contains("m=video 9 UDP/TLS/RTP/SAVPF 96"));
+        response.release();
+        channel.finishAndReleaseAll();
+        sessionManager.close();
+    }
+
+    @Test
     void shouldRemoveSubscriberWhenPeerConnectionCloses() throws Exception {
         StreamRegistry registry = new StreamRegistry();
         StreamKey streamKey = new StreamKey(StreamProtocol.RTMP, "live", "cam01");
@@ -169,6 +200,33 @@ class WebRtcPlayHandlerTest {
                 + "m=video 9 UDP/TLS/RTP/SAVPF 96\r\n"
                 + "c=IN IP4 0.0.0.0\r\n"
                 + "a=mid:0\r\n"
+                + "a=setup:actpass\r\n"
+                + "a=recvonly\r\n"
+                + "a=rtcp-mux\r\n"
+                + "a=rtpmap:96 H264/90000\r\n";
+    }
+
+    private static String offerWithAudioAndH264() {
+        return "v=0\r\n"
+                + "o=- 0 0 IN IP4 127.0.0.1\r\n"
+                + "s=-\r\n"
+                + "t=0 0\r\n"
+                + "a=group:BUNDLE 0 1\r\n"
+                + "a=ice-ufrag:abcd\r\n"
+                + "a=ice-pwd:abcdefghijklmnopqrstuv\r\n"
+                + "a=fingerprint:sha-256 11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00\r\n"
+                + "m=audio 9 UDP/TLS/RTP/SAVPF 111 0 8\r\n"
+                + "c=IN IP4 0.0.0.0\r\n"
+                + "a=mid:0\r\n"
+                + "a=setup:actpass\r\n"
+                + "a=recvonly\r\n"
+                + "a=rtcp-mux\r\n"
+                + "a=rtpmap:111 opus/48000/2\r\n"
+                + "a=rtpmap:0 PCMU/8000\r\n"
+                + "a=rtpmap:8 PCMA/8000\r\n"
+                + "m=video 9 UDP/TLS/RTP/SAVPF 96\r\n"
+                + "c=IN IP4 0.0.0.0\r\n"
+                + "a=mid:1\r\n"
                 + "a=setup:actpass\r\n"
                 + "a=recvonly\r\n"
                 + "a=rtcp-mux\r\n"

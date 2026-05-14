@@ -88,7 +88,7 @@ public final class WebRtcPlayHandler implements HttpRequestHandler {
         try {
             RTCSessionDescription offer = new RTCSessionDescription("offer", offerSdp);
             peerConnection.setRemoteDescription(offer);
-            configureOutgoingVideoTrack(peerConnection, streamName);
+            configureOutgoingTracks(peerConnection, streamName);
             RTCSessionDescription answer = peerConnection.createAnswer().get();
             peerConnection.setLocalDescription(answer);
             log.info("coming  offer: \r\n{}",  offer.getSdp());
@@ -199,20 +199,21 @@ public final class WebRtcPlayHandler implements HttpRequestHandler {
         return value == null || value.trim().isEmpty();
     }
 
-    private static void configureOutgoingVideoTrack(RTCPeerConnection peerConnection, String streamName) {
+    private static void configureOutgoingTracks(RTCPeerConnection peerConnection, String streamName) {
         for (RTCRtpTransceiver transceiver : peerConnection.getTransceivers()) {
             if (transceiver == null
-                    || transceiver.getKind() != MediaStreamTrack.Kind.VIDEO
                     || transceiver.getSender() == null
                     || transceiver.getSender().getTrack() != null
                     || !canSend(transceiver)) {
                 continue;
             }
+            String trackIdPrefix = transceiver.getKind() == MediaStreamTrack.Kind.AUDIO
+                    ? "webrtc-audio-"
+                    : "webrtc-video-";
             transceiver.getSender().replaceTrack(new MediaStreamTrack(
-                    MediaStreamTrack.Kind.VIDEO,
-                    "webrtc-video-" + safeTrackId(streamName)
+                    transceiver.getKind(),
+                    trackIdPrefix + safeTrackId(streamName)
             ));
-            return;
         }
     }
 

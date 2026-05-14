@@ -1,5 +1,7 @@
 package com.wenting.mediaserver.protocol.webrtc.api;
 
+import com.wenting.mediaserver.core.enums.publish.CodecType;
+
 /**
  * RTP transceiver (analogous to JS RTCRtpTransceiver).
  *
@@ -17,6 +19,7 @@ public class RTCRtpTransceiver {
     private Direction direction;
     private volatile Integer negotiatedPayloadType;
     private volatile Integer negotiatedClockRate;
+    private volatile CodecType negotiatedCodecType;
 
     public RTCRtpTransceiver(String mid, MediaStreamTrack.Kind kind,
                               RTCRtpSender sender, RTCRtpReceiver receiver) {
@@ -37,6 +40,8 @@ public class RTCRtpTransceiver {
     public void setNegotiatedPayloadType(Integer negotiatedPayloadType) { this.negotiatedPayloadType = negotiatedPayloadType; }
     public Integer getNegotiatedClockRate() { return negotiatedClockRate; }
     public void setNegotiatedClockRate(Integer negotiatedClockRate) { this.negotiatedClockRate = negotiatedClockRate; }
+    public CodecType getNegotiatedCodecType() { return negotiatedCodecType; }
+    public void setNegotiatedCodecType(CodecType negotiatedCodecType) { this.negotiatedCodecType = negotiatedCodecType; }
 
     @Override
     public String toString() {

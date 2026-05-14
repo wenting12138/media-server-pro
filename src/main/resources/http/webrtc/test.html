@@ -36,7 +36,7 @@
       <div class="hint">测试页会向 <code>/webrtc/play</code> 发送 offer，请先确保对应流已存在。</div>
     </div>
     <div class="panel">
-      <video id="video" autoplay playsinline controls muted></video>
+      <video id="video" autoplay playsinline controls></video>
     </div>
     <div class="panel">
       <pre id="log"></pre>
@@ -84,6 +84,7 @@
       const stream = document.getElementById("stream").value.trim();
       log("starting webrtc play", { app, stream });
       pc = new RTCPeerConnection({ iceServers: [] });
+      pc.addTransceiver("audio", { direction: "recvonly" });
       pc.addTransceiver("video", { direction: "recvonly" });
       pc.ontrack = (event) => {
         log("ontrack", { kind: event.track && event.track.kind });

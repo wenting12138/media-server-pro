@@ -1,5 +1,6 @@
 package com.wenting.mediaserver.protocol.webrtc.api;
 
+import com.wenting.mediaserver.core.enums.publish.CodecType;
 import com.wenting.mediaserver.protocol.webrtc.WebRtcUdpBootstrap;
 import com.wenting.mediaserver.protocol.webrtc.core.dtls.DtlsHandshake;
 import com.wenting.mediaserver.protocol.webrtc.core.dtls.UdpDatagramTransport;
@@ -1297,10 +1298,24 @@ public class RTCPeerConnection implements AutoCloseable {
             return;
         }
 
-        int payloadType = answerPayloadType(offeredMedia, transceiver.getKind());
+        Integer payloadType = answerPayloadType(offeredMedia, transceiver.getKind());
+        if (payloadType == null) {
+            transceiver.setNegotiatedPayloadType(null);
+            transceiver.setNegotiatedClockRate(null);
+            transceiver.setNegotiatedCodecType(null);
+            transceiver.setDirection(RTCRtpTransceiver.Direction.INACTIVE);
+            SdpBuilder.MediaBuilder rejected = builder.addMedia(
+                offeredMedia.mediaType,
+                0,
+                offeredMedia.protocol,
+                firstPayloadTypeOrDefault(offeredMedia));
+            rejected.addAttribute("mid", safeMid(offeredMedia));
+            return;
+        }
         String rtpMap = answerRtpMap(offeredMedia, payloadType, transceiver.getKind());
-        transceiver.setNegotiatedPayloadType(Integer.valueOf(payloadType));
+        transceiver.setNegotiatedPayloadType(payloadType);
         transceiver.setNegotiatedClockRate(Integer.valueOf(parseClockRateFromRtpMap(rtpMap, transceiver.getKind())));
+        transceiver.setNegotiatedCodecType(parseCodecTypeFromRtpMap(rtpMap, transceiver.getKind()));
         SdpBuilder.MediaBuilder media = builder.addMedia(offeredMedia.mediaType, 9, offeredMedia.protocol, payloadType);
         media.addAttribute("mid", safeMid(offeredMedia));
         media.addAttribute("rtpmap", rtpMap);
@@ -1342,13 +1357,23 @@ public class RTCPeerConnection implements AutoCloseable {
         }
     }
 
-    private int answerPayloadType(MediaDescription offeredMedia, MediaStreamTrack.Kind kind) {
-        String codecName = kind == MediaStreamTrack.Kind.AUDIO ? "opus/" : "h264/";
-        Integer matched = findPayloadTypeByCodec(offeredMedia, codecName);
-        if (matched != null) {
-            return matched.intValue();
+    private Integer answerPayloadType(MediaDescription offeredMedia, MediaStreamTrack.Kind kind) {
+        if (kind == MediaStreamTrack.Kind.AUDIO) {
+            Integer matched = findPayloadTypeByCodec(offeredMedia, "pcmu/");
+            if (matched != null) {
+                return matched;
+            }
+            matched = findPayloadTypeByCodec(offeredMedia, "pcma/");
+            if (matched != null) {
+                return matched;
+            }
+            return null;
         }
-        return firstPayloadTypeOrDefault(offeredMedia);
+        Integer matched = findPayloadTypeByCodec(offeredMedia, "h264/");
+        if (matched != null) {
+            return matched;
+        }
+        return null;
     }
 
     private String answerRtpMap(MediaDescription offeredMedia, int payloadType, MediaStreamTrack.Kind kind) {
@@ -1356,9 +1381,39 @@ public class RTCPeerConnection implements AutoCloseable {
         if (offered != null) {
             return offered;
         }
+        if (kind == MediaStreamTrack.Kind.AUDIO && payloadType == 0) {
+            return "0 PCMU/8000";
+        }
+        if (kind == MediaStreamTrack.Kind.AUDIO && payloadType == 8) {
+            return "8 PCMA/8000";
+        }
         return kind == MediaStreamTrack.Kind.AUDIO
             ? payloadType + " opus/48000/2"
             : payloadType + " H264/90000";
+    }
+
+    private CodecType parseCodecTypeFromRtpMap(String rtpMap, MediaStreamTrack.Kind kind) {
+        if (rtpMap == null) {
+            return kind == MediaStreamTrack.Kind.VIDEO ? CodecType.H264 : CodecType.UNKNOWN;
+        }
+        String[] parts = rtpMap.trim().split("\\s+", 2);
+        if (parts.length < 2) {
+            return kind == MediaStreamTrack.Kind.VIDEO ? CodecType.H264 : CodecType.UNKNOWN;
+        }
+        String codec = parts[1].toLowerCase(Locale.ROOT);
+        if (codec.startsWith("h264/")) {
+            return CodecType.H264;
+        }
+        if (codec.startsWith("opus/")) {
+            return CodecType.OPUS;
+        }
+        if (codec.startsWith("pcmu/")) {
+            return CodecType.G711U;
+        }
+        if (codec.startsWith("pcma/")) {
+            return CodecType.G711A;
+        }
+        return CodecType.UNKNOWN;
     }
 
     private Integer findPayloadTypeByCodec(MediaDescription media, String codecPrefixLowerCase) {

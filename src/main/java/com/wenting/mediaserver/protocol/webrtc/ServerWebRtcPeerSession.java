@@ -21,6 +21,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.net.InetSocketAddress;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -46,6 +47,7 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
     private final MediaSubscriberAdapter subscriberAdapter;
     private final RtspFrameToRtpPacketizer frameToRtpPacketizer = new RtspFrameToRtpPacketizer();
     private final Map<String, InboundMediaFrame> latestConfigFramesByTrackId = new ConcurrentHashMap<String, InboundMediaFrame>();
+    private final Map<String, AacToG711Transcoder> audioTranscodersByTrackId = new ConcurrentHashMap<String, AacToG711Transcoder>();
     private final Map<String, RtpSendTrackState> rtpSendStatesByTrackId = new ConcurrentHashMap<String, RtpSendTrackState>();
     private final Map<String, Boolean> startedTracksByTrackId = new ConcurrentHashMap<String, Boolean>();
     private final Map<String, Boolean> firstSrtpPacketLoggedByTrackId = new ConcurrentHashMap<String, Boolean>();
@@ -110,9 +112,19 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
     }
 
     public synchronized void writeInboundFrame(InboundMediaFrame frame) {
-        if (closed.get() || frame == null || frame.trackType() != TrackType.VIDEO || frame.codecType() != CodecType.H264) {
+        if (closed.get() || frame == null) {
             return;
         }
+        if (frame.trackType() == TrackType.VIDEO && frame.codecType() == CodecType.H264) {
+            writeVideoFrame(frame);
+            return;
+        }
+        if (frame.trackType() == TrackType.AUDIO) {
+            writeAudioFrame(frame);
+        }
+    }
+
+    private void writeVideoFrame(InboundMediaFrame frame) {
         String trackId = normalizeTrackId(frame.trackId());
         if (frame.configFrame()) {
             latestConfigFramesByTrackId.put(trackId, frame);
@@ -146,6 +158,43 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
         if (frame.keyFrame() && !frame.configFrame()) {
             logFirstNonConfigKeyFrame(trackId, frame);
         }
+    }
+
+    private void writeAudioFrame(InboundMediaFrame frame) {
+        String trackId = normalizeTrackId(frame.trackId());
+        if (frame.configFrame()) {
+            latestConfigFramesByTrackId.put(trackId, frame);
+            return;
+        }
+        if (!canSendFrame(frame)) {
+            return;
+        }
+        CodecType negotiatedCodec = resolveNegotiatedAudioCodec(frame);
+        if (negotiatedCodec == CodecType.G711A || negotiatedCodec == CodecType.G711U) {
+            if (frame.codecType() == negotiatedCodec) {
+                sendFrame(frame, frame);
+                return;
+            }
+            if (frame.codecType() == CodecType.AAC || frame.codecType() == CodecType.MPEG4_GENERIC) {
+                InboundMediaFrame configFrame = latestConfigFramesByTrackId.get(trackId);
+                if (configFrame == null) {
+                    logDropOnce(trackId, "wait-aac-config",
+                            "WebRTC audio waiting AAC config frame session={} stream={} track={}",
+                            sessionId, streamKey, trackId);
+                    return;
+                }
+                AacToG711Transcoder transcoder = audioTranscoder(trackId, negotiatedCodec);
+                List<InboundMediaFrame> outputs = new ArrayList<InboundMediaFrame>(transcoder.transcode(configFrame));
+                outputs.addAll(transcoder.transcode(frame));
+                for (InboundMediaFrame output : outputs) {
+                    sendFrame(output, output);
+                }
+                return;
+            }
+        }
+        logDropOnce(trackId, "unsupported-audio-codec",
+                "WebRTC audio codec unsupported session={} stream={} track={} sourceCodec={} negotiatedCodec={}",
+                sessionId, streamKey, trackId, frame.codecType(), negotiatedCodec);
     }
 
     public void receive(byte[] data, InetSocketAddress remoteAddress) {
@@ -281,6 +330,9 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
             if (!matchesKind(transceiver, frame) || !canSend(transceiver)) {
                 continue;
             }
+            if (transceiver.getNegotiatedPayloadType() == null) {
+                continue;
+            }
             if (transceiver.getSender().getSrtpContext() == null) {
                 continue;
             }
@@ -290,8 +342,13 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
     }
 
     private boolean matchesKind(RTCRtpTransceiver transceiver, InboundMediaFrame frame) {
-        return frame.trackType() == TrackType.VIDEO
-                && transceiver.getKind() == com.wenting.mediaserver.protocol.webrtc.api.MediaStreamTrack.Kind.VIDEO;
+        if (frame.trackType() == TrackType.VIDEO) {
+            return transceiver.getKind() == com.wenting.mediaserver.protocol.webrtc.api.MediaStreamTrack.Kind.VIDEO;
+        }
+        if (frame.trackType() == TrackType.AUDIO) {
+            return transceiver.getKind() == com.wenting.mediaserver.protocol.webrtc.api.MediaStreamTrack.Kind.AUDIO;
+        }
+        return false;
     }
 
     private boolean canSend(RTCRtpTransceiver transceiver) {
@@ -315,7 +372,36 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
     }
 
     private int defaultClockRate(InboundMediaFrame frame) {
-        return frame.trackType() == TrackType.VIDEO ? 90000 : 48000;
+        if (frame.trackType() == TrackType.VIDEO) {
+            return 90000;
+        }
+        if (frame.codecType() == CodecType.G711A || frame.codecType() == CodecType.G711U) {
+            return 8000;
+        }
+        return 48000;
+    }
+
+    private CodecType resolveNegotiatedAudioCodec(InboundMediaFrame frame) {
+        RTCRtpTransceiver transceiver = findSendTransceiver(frame);
+        if (transceiver == null || transceiver.getNegotiatedCodecType() == null) {
+            return CodecType.UNKNOWN;
+        }
+        return transceiver.getNegotiatedCodecType();
+    }
+
+    private AacToG711Transcoder audioTranscoder(String trackId, CodecType negotiatedCodec) {
+        String key = normalizeTrackId(trackId) + "|" + negotiatedCodec.name();
+        AacToG711Transcoder transcoder = audioTranscodersByTrackId.get(key);
+        if (transcoder != null) {
+            return transcoder;
+        }
+        AacToG711Transcoder created = new AacToG711Transcoder(negotiatedCodec);
+        AacToG711Transcoder existing = audioTranscodersByTrackId.putIfAbsent(key, created);
+        if (existing != null) {
+            created.close();
+            return existing;
+        }
+        return created;
     }
 
     private int resolvePayloadType(RTCRtpTransceiver transceiver, CodecType codecType) {
@@ -352,6 +438,12 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
         if (stream != null) {
             stream.removeSubscriber(sessionId);
         }
+        for (AacToG711Transcoder transcoder : audioTranscodersByTrackId.values()) {
+            if (transcoder != null) {
+                transcoder.close();
+            }
+        }
+        audioTranscodersByTrackId.clear();
         peerConnection.close();
         datagramIo.close();
     }
