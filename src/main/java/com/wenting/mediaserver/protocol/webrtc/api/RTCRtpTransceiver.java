@@ -15,6 +15,8 @@ public class RTCRtpTransceiver {
     private final RTCRtpSender sender;
     private final RTCRtpReceiver receiver;
     private Direction direction;
+    private volatile Integer negotiatedPayloadType;
+    private volatile Integer negotiatedClockRate;
 
     public RTCRtpTransceiver(String mid, MediaStreamTrack.Kind kind,
                               RTCRtpSender sender, RTCRtpReceiver receiver) {
@@ -31,6 +33,10 @@ public class RTCRtpTransceiver {
     public RTCRtpReceiver getReceiver() { return receiver; }
     public Direction getDirection() { return direction; }
     public void setDirection(Direction direction) { this.direction = direction; }
+    public Integer getNegotiatedPayloadType() { return negotiatedPayloadType; }
+    public void setNegotiatedPayloadType(Integer negotiatedPayloadType) { this.negotiatedPayloadType = negotiatedPayloadType; }
+    public Integer getNegotiatedClockRate() { return negotiatedClockRate; }
+    public void setNegotiatedClockRate(Integer negotiatedClockRate) { this.negotiatedClockRate = negotiatedClockRate; }
 
     @Override
     public String toString() {

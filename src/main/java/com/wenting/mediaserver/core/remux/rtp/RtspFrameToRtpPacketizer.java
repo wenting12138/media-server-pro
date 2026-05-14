@@ -143,6 +143,7 @@ public final class RtspFrameToRtpPacketizer {
         int prefix = nalLengthSize <= 0 ? 4 : nalLengthSize;
         List<byte[]> nals = new ArrayList<byte[]>();
         int index = 0;
+        boolean parseError = false;
         while (index + prefix <= payload.length) {
             int nalLength = 0;
             for (int i = 0; i < prefix; i++) {
@@ -150,6 +151,7 @@ public final class RtspFrameToRtpPacketizer {
             }
             index += prefix;
             if (nalLength <= 0 || index + nalLength > payload.length) {
+                parseError = true;
                 break;
             }
             byte[] nal = new byte[nalLength];
@@ -157,7 +159,79 @@ public final class RtspFrameToRtpPacketizer {
             nals.add(nal);
             index += nalLength;
         }
+        if ((!parseError && !nals.isEmpty() && index == payload.length)) {
+            return nals;
+        }
+        if (looksLikeAnnexB(payload)) {
+            List<byte[]> annexBNals = splitAnnexBNals(payload);
+            if (!annexBNals.isEmpty()) {
+                return annexBNals;
+            }
+        }
         return nals;
+    }
+
+    private boolean looksLikeAnnexB(byte[] payload) {
+        if (payload == null || payload.length < 4) {
+            return false;
+        }
+        for (int i = 0; i + 3 < payload.length; i++) {
+            if (payload[i] == 0x00 && payload[i + 1] == 0x00) {
+                if (payload[i + 2] == 0x01) {
+                    return true;
+                }
+                if (i + 3 < payload.length && payload[i + 2] == 0x00 && payload[i + 3] == 0x01) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private List<byte[]> splitAnnexBNals(byte[] payload) {
+        List<byte[]> nals = new ArrayList<byte[]>();
+        if (payload == null || payload.length < 4) {
+            return nals;
+        }
+        int start = findStartCode(payload, 0);
+        while (start >= 0) {
+            int nalStart = startCodeEnd(payload, start);
+            int nextStart = findStartCode(payload, nalStart);
+            int nalEnd = nextStart >= 0 ? nextStart : payload.length;
+            if (nalEnd > nalStart) {
+                byte[] nal = new byte[nalEnd - nalStart];
+                System.arraycopy(payload, nalStart, nal, 0, nal.length);
+                nals.add(nal);
+            }
+            start = nextStart;
+        }
+        return nals;
+    }
+
+    private int findStartCode(byte[] payload, int from) {
+        for (int i = Math.max(0, from); i + 3 < payload.length; i++) {
+            if (payload[i] != 0x00 || payload[i + 1] != 0x00) {
+                continue;
+            }
+            if (payload[i + 2] == 0x01) {
+                return i;
+            }
+            if (i + 3 < payload.length && payload[i + 2] == 0x00 && payload[i + 3] == 0x01) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private int startCodeEnd(byte[] payload, int start) {
+        if (start + 2 < payload.length && payload[start] == 0x00 && payload[start + 1] == 0x00 && payload[start + 2] == 0x01) {
+            return start + 3;
+        }
+        if (start + 3 < payload.length && payload[start] == 0x00 && payload[start + 1] == 0x00
+                && payload[start + 2] == 0x00 && payload[start + 3] == 0x01) {
+            return start + 4;
+        }
+        return start;
     }
 
     private List<RtpPacketChunk> fragmentH264Nal(byte[] nal, boolean markerForLast) {

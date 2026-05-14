@@ -102,6 +102,7 @@ public class RTCPeerConnection implements AutoCloseable {
     private volatile SignalingState signalingState = SignalingState.STABLE;
     private volatile IceConnectionState iceConnectionState = IceConnectionState.NEW;
     private volatile ConnectionState connectionState = ConnectionState.NEW;
+    private volatile boolean sctpNegotiated = false;
     private boolean iceStarted = false;
     private boolean dtlsStarted = false;
     private boolean remoteDescriptionSet = false;
@@ -243,6 +244,7 @@ public class RTCPeerConnection implements AutoCloseable {
         try {
             SdpDescription parsed = SdpParser.parse(desc.getSdp());
             this.remoteSdp = parsed;
+            this.sctpNegotiated = hasSctpMedia(parsed);
 
             this.remoteUfrag = parsed.getIceUfrag();
             this.remotePwd = parsed.getIcePwd();
@@ -775,7 +777,12 @@ public class RTCPeerConnection implements AutoCloseable {
                 }
 
                 // Start SCTP over DTLS
-                startSctp(handshake.getDtlsTransport());
+                if (expectsSctp()) {
+                    startSctp(handshake.getDtlsTransport());
+                } else {
+                    // Media-only session: DTLS/SRTP is enough to mark connected.
+                    setConnectionState(ConnectionState.CONNECTED);
+                }
 
                 // 启动连接健康监控
                 startConnectionMonitor();
@@ -807,28 +814,23 @@ public class RTCPeerConnection implements AutoCloseable {
                     return;
                 }
 
-                // 检查 DTLS 传输是否还活着
+                // DTLS 健康检查不发送空包：
+                // BouncyCastle DTLSTransport 不接受 len=0 的 send，
+                // 会抛 IllegalArgumentException("'off' is an invalid offset: 0")。
+                // 这里改为仅检查对象存在，连接生死交给 SCTP 状态与实际收发路径判定。
                 if (dtlsHandshake != null && dtlsHandshake.getDtlsTransport() != null) {
-                    DTLSTransport dtls = dtlsHandshake.getDtlsTransport();
-                    // 尝试发送一个空的 DTLS 应用数据包来检查连接
-                    // 如果连接已死，BC 会抛出 IOException
-                    try {
-                        dtls.send(new byte[0], 0, 0);
-                    } catch (IOException e) {
-                        // send 失败不一定是连接断开，但持续失败需要处理
-                    }
+                    // no-op
                 }
 
                 // 检查 SCTP 状态
-                if (sctpTransport != null && sctpTransport.getAssociation() != null) {
+                if (expectsSctp() && sctpTransport != null && sctpTransport.getAssociation() != null) {
                     SctpAssociation.State sctpState =
                         sctpTransport.getAssociation().getState();
                     if (sctpState == SctpAssociation.State.CLOSED
                         || sctpState == SctpAssociation.State.COOKIE_WAIT
                         || sctpState == SctpAssociation.State.COOKIE_ECHOED) {
-                        // SCTP 连接已断开但应用层还认为是 CONNECTED
                         LOG.warn("Connection monitor: SCTP state is " + sctpState
-                            + ", but connection state is " + connectionState);
+                            + ", connection state is " + connectionState);
                     }
                 }
             } catch (Exception e) {
@@ -1160,6 +1162,8 @@ public class RTCPeerConnection implements AutoCloseable {
             int pt = trans.getKind() == MediaStreamTrack.Kind.AUDIO ? 111 : 96;
             String codec = trans.getKind() == MediaStreamTrack.Kind.AUDIO
                 ? "111 opus/48000/2" : "96 H264/90000";
+            trans.setNegotiatedPayloadType(Integer.valueOf(pt));
+            trans.setNegotiatedClockRate(Integer.valueOf(trans.getKind() == MediaStreamTrack.Kind.AUDIO ? 48000 : 90000));
 
             SdpBuilder.MediaBuilder media = builder.addMedia(mediaType, 9, "UDP/TLS/RTP/SAVPF",
                 trans.getKind() == MediaStreamTrack.Kind.AUDIO ? 111 : 96);
@@ -1263,9 +1267,13 @@ public class RTCPeerConnection implements AutoCloseable {
         }
 
         int payloadType = answerPayloadType(offeredMedia, transceiver.getKind());
+        String rtpMap = answerRtpMap(offeredMedia, payloadType, transceiver.getKind());
+        transceiver.setNegotiatedPayloadType(Integer.valueOf(payloadType));
+        transceiver.setNegotiatedClockRate(Integer.valueOf(parseClockRateFromRtpMap(rtpMap, transceiver.getKind())));
         SdpBuilder.MediaBuilder media = builder.addMedia(offeredMedia.mediaType, 9, offeredMedia.protocol, payloadType);
         media.addAttribute("mid", safeMid(offeredMedia));
-        media.addAttribute("rtpmap", answerRtpMap(offeredMedia, payloadType, transceiver.getKind()));
+        media.addAttribute("rtpmap", rtpMap);
+        copyCodecAttributes(offeredMedia, media, payloadType);
         media.addAttribute("rtcp-mux");
         media.addAttribute("setup", "passive");
         addDirectionAttribute(media, transceiver.getDirection());
@@ -1370,6 +1378,42 @@ public class RTCPeerConnection implements AutoCloseable {
         return mid == null || mid.trim().isEmpty() ? "0" : mid;
     }
 
+    private void copyCodecAttributes(MediaDescription offeredMedia, SdpBuilder.MediaBuilder media, int payloadType) {
+        String ptPrefix = String.valueOf(payloadType) + " ";
+        for (SdpDescription.Attribute attr : offeredMedia.attributes) {
+            if (attr == null || attr.key == null || attr.value == null) {
+                continue;
+            }
+            if ("fmtp".equals(attr.key) && attr.value.startsWith(ptPrefix)) {
+                media.addAttribute("fmtp", attr.value);
+                continue;
+            }
+            if ("rtcp-fb".equals(attr.key)
+                && (attr.value.startsWith(ptPrefix) || attr.value.startsWith("* "))) {
+                media.addAttribute("rtcp-fb", attr.value);
+            }
+        }
+    }
+
+    private int parseClockRateFromRtpMap(String rtpMap, MediaStreamTrack.Kind kind) {
+        if (rtpMap == null) {
+            return kind == MediaStreamTrack.Kind.AUDIO ? 48000 : 90000;
+        }
+        String[] parts = rtpMap.trim().split("\\s+");
+        if (parts.length < 2) {
+            return kind == MediaStreamTrack.Kind.AUDIO ? 48000 : 90000;
+        }
+        String[] codecParts = parts[1].split("/");
+        if (codecParts.length < 2) {
+            return kind == MediaStreamTrack.Kind.AUDIO ? 48000 : 90000;
+        }
+        try {
+            return Integer.parseInt(codecParts[1]);
+        } catch (NumberFormatException e) {
+            return kind == MediaStreamTrack.Kind.AUDIO ? 48000 : 90000;
+        }
+    }
+
     private void addCandidateAttributes(SdpBuilder.MediaBuilder media, IceAgent agent) {
         for (IceCandidate c : agent.getLocalCandidates()) {
             String relatedAddr = null;
@@ -1438,6 +1482,27 @@ public class RTCPeerConnection implements AutoCloseable {
             chars[i] = CREDENTIAL_CHARS[random.nextInt(CREDENTIAL_CHARS.length)];
         }
         return new String(chars);
+    }
+
+    private static boolean hasSctpMedia(SdpDescription sdp) {
+        if (sdp == null) {
+            return false;
+        }
+        for (MediaDescription md : sdp.getMediaDescriptions()) {
+            if (md == null || md.mediaType == null || md.protocol == null) {
+                continue;
+            }
+            if ("application".equals(md.mediaType)
+                && md.port > 0
+                && md.protocol.toUpperCase(Locale.ROOT).contains("SCTP")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean expectsSctp() {
+        return sctpNegotiated || !dataChannels.isEmpty() || !pendingDataChannels.isEmpty();
     }
 
     private boolean resolveDtlsServerRole() {

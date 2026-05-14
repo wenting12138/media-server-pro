@@ -22,10 +22,12 @@ import org.slf4j.LoggerFactory;
 
 import java.net.InetSocketAddress;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Service-layer wrapper around the generic WebRTC peer connection API.
@@ -46,6 +48,11 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
     private final Map<String, InboundMediaFrame> latestConfigFramesByTrackId = new ConcurrentHashMap<String, InboundMediaFrame>();
     private final Map<String, RtpSendTrackState> rtpSendStatesByTrackId = new ConcurrentHashMap<String, RtpSendTrackState>();
     private final Map<String, Boolean> startedTracksByTrackId = new ConcurrentHashMap<String, Boolean>();
+    private final Map<String, Boolean> firstSrtpPacketLoggedByTrackId = new ConcurrentHashMap<String, Boolean>();
+    private final Map<String, Boolean> firstDropReasonLogged = new ConcurrentHashMap<String, Boolean>();
+    private final Map<String, Boolean> firstNonConfigKeyFrameLoggedByTrackId = new ConcurrentHashMap<String, Boolean>();
+    private final Map<String, Boolean> configProfileLoggedByTrackId = new ConcurrentHashMap<String, Boolean>();
+    private final AtomicLong outboundSrtpPacketCount = new AtomicLong(0);
     private final AtomicBoolean closed = new AtomicBoolean(false);
     private volatile IPublishedStream publishedStream;
     private volatile InetSocketAddress remoteAddress;
@@ -96,6 +103,10 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
     }
 
     public void writeMediaPacket(InboundRtpPacket packet) {
+        if (packet == null || packet.rtcp()) {
+            return;
+        }
+        writeInboundFrame(packet.frame());
     }
 
     public synchronized void writeInboundFrame(InboundMediaFrame frame) {
@@ -105,6 +116,7 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
         String trackId = normalizeTrackId(frame.trackId());
         if (frame.configFrame()) {
             latestConfigFramesByTrackId.put(trackId, frame);
+            logConfigProfileOnce(trackId, frame);
             if (isStarted(trackId)) {
                 sendFrame(frame, frame);
             }
@@ -115,16 +127,25 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
         }
         if (!isStarted(trackId)) {
             if (!frame.keyFrame()) {
+                logDropOnce(trackId, "wait-keyframe",
+                        "WebRTC track waiting keyframe session={} stream={} track={}",
+                        sessionId, streamKey, trackId);
                 return;
             }
             InboundMediaFrame configFrame = latestConfigFramesByTrackId.get(trackId);
             if (configFrame == null) {
+                logDropOnce(trackId, "wait-config",
+                        "WebRTC track waiting H264 config frame session={} stream={} track={}",
+                        sessionId, streamKey, trackId);
                 return;
             }
             sendFrame(configFrame, frame);
             startedTracksByTrackId.put(trackId, Boolean.TRUE);
         }
         sendFrame(frame, frame);
+        if (frame.keyFrame() && !frame.configFrame()) {
+            logFirstNonConfigKeyFrame(trackId, frame);
+        }
     }
 
     public void receive(byte[] data, InetSocketAddress remoteAddress) {
@@ -135,7 +156,20 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
     }
 
     private boolean canSendFrame(InboundMediaFrame frame) {
-        return remoteAddress != null && findSendTransceiver(frame) != null;
+        if (remoteAddress == null) {
+            logDropOnce(normalizeTrackId(frame.trackId()), "no-remote",
+                    "WebRTC cannot send yet: remote address not bound session={} stream={} track={}",
+                    sessionId, streamKey, normalizeTrackId(frame.trackId()));
+            return false;
+        }
+        RTCRtpTransceiver transceiver = findSendTransceiver(frame);
+        if (transceiver == null) {
+            logDropOnce(normalizeTrackId(frame.trackId()), "no-transceiver",
+                    "WebRTC cannot send yet: no send transceiver with SRTP context session={} stream={} track={}",
+                    sessionId, streamKey, normalizeTrackId(frame.trackId()));
+            return false;
+        }
+        return true;
     }
 
     private void sendFrame(InboundMediaFrame frame, InboundMediaFrame timestampFrame) {
@@ -151,11 +185,14 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
                 latestConfigFramesByTrackId.get(normalizeTrackId(frame.trackId()))
         );
         if (chunks.isEmpty()) {
+            logDropOnce(normalizeTrackId(frame.trackId()), "empty-chunks",
+                    "WebRTC packetizer produced no RTP chunks session={} stream={} track={} config={} key={} bytes={}",
+                    sessionId, streamKey, normalizeTrackId(frame.trackId()), frame.configFrame(), frame.keyFrame(), frame.payloadLength());
             return;
         }
         RtpSendTrackState sendState = sendState(frame.trackId(), sender.getSsrc());
-        int payloadType = RtpPayloadTypeResolver.resolve(frame.codecType());
-        int clockRate = defaultClockRate(frame);
+        int payloadType = resolvePayloadType(transceiver, frame.codecType());
+        int clockRate = resolveClockRate(transceiver, frame);
         long rtpTimestamp = sendState.toRtpTimestamp(clockRate, mediaTimestampMillis(timestampFrame));
         SrtpTransform transform = new SrtpTransform(sender.getSrtpContext(), sender.getSsrc());
         for (RtpPacketChunk chunk : chunks) {
@@ -173,11 +210,66 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
                     chunk.payload()
             );
             byte[] srtpPacket = transform.protect(rtpPacket);
+            logFirstSrtpPacket(frame, payloadType, clockRate, target, srtpPacket.length, chunk.marker());
+            logPacketCount();
             datagramIo.send(srtpPacket, target).exceptionally(ex -> {
                 log.warn("Failed to send WebRTC SRTP packet session={} stream={} target={}",
                         sessionId, streamKey, target, ex);
                 return null;
             });
+        }
+    }
+
+    private void logFirstSrtpPacket(InboundMediaFrame frame, int payloadType, int clockRate, InetSocketAddress target, int bytes, boolean marker) {
+        String trackId = normalizeTrackId(frame.trackId());
+        if (Boolean.TRUE.equals(firstSrtpPacketLoggedByTrackId.putIfAbsent(trackId, Boolean.TRUE))) {
+            return;
+        }
+        log.info("First WebRTC SRTP packet sent session={} stream={} track={} target={} payloadType={} clockRate={} bytes={} keyFrame={} configFrame={} marker={}",
+                sessionId, streamKey, trackId, target, payloadType, clockRate, bytes, frame.keyFrame(), frame.configFrame(), marker);
+    }
+
+    private void logDropOnce(String trackId, String reason, String pattern, Object... args) {
+        String key = trackId + "|" + reason;
+        if (Boolean.TRUE.equals(firstDropReasonLogged.putIfAbsent(key, Boolean.TRUE))) {
+            return;
+        }
+        log.info(pattern, args);
+    }
+
+    private void logFirstNonConfigKeyFrame(String trackId, InboundMediaFrame frame) {
+        if (Boolean.TRUE.equals(firstNonConfigKeyFrameLoggedByTrackId.putIfAbsent(trackId, Boolean.TRUE))) {
+            return;
+        }
+        log.info("First non-config keyframe sent session={} stream={} track={} bytes={} pts={} dts={}",
+                sessionId, streamKey, trackId, frame.payloadLength(), frame.ptsMillis(), frame.dtsMillis());
+    }
+
+    private void logConfigProfileOnce(String trackId, InboundMediaFrame frame) {
+        if (frame == null || frame.payload() == null || frame.payloadLength() < 4) {
+            return;
+        }
+        if (Boolean.TRUE.equals(configProfileLoggedByTrackId.putIfAbsent(trackId, Boolean.TRUE))) {
+            return;
+        }
+        byte[] p = frame.payload();
+        int profile = p[1] & 0xFF;
+        int compat = p[2] & 0xFF;
+        int level = p[3] & 0xFF;
+        String profileLevelId = toHex(profile) + toHex(compat) + toHex(level);
+        log.info("WebRTC H264 config observed session={} stream={} track={} profile-level-id={} configBytes={}",
+                sessionId, streamKey, trackId, profileLevelId, frame.payloadLength());
+    }
+
+    private static String toHex(int value) {
+        return String.format(Locale.ROOT, "%02x", value & 0xFF);
+    }
+
+    private void logPacketCount() {
+        long count = outboundSrtpPacketCount.incrementAndGet();
+        if (count == 1 || count % 500 == 0) {
+            log.info("WebRTC SRTP packet count session={} stream={} packets={}",
+                    sessionId, streamKey, count);
         }
     }
 
@@ -226,11 +318,25 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
         return frame.trackType() == TrackType.VIDEO ? 90000 : 48000;
     }
 
+    private int resolvePayloadType(RTCRtpTransceiver transceiver, CodecType codecType) {
+        if (transceiver != null && transceiver.getNegotiatedPayloadType() != null) {
+            return transceiver.getNegotiatedPayloadType().intValue();
+        }
+        return RtpPayloadTypeResolver.resolve(codecType);
+    }
+
+    private int resolveClockRate(RTCRtpTransceiver transceiver, InboundMediaFrame frame) {
+        if (transceiver != null && transceiver.getNegotiatedClockRate() != null && transceiver.getNegotiatedClockRate().intValue() > 0) {
+            return transceiver.getNegotiatedClockRate().intValue();
+        }
+        return defaultClockRate(frame);
+    }
+
     private Long mediaTimestampMillis(InboundMediaFrame frame) {
         if (frame == null) {
             return null;
         }
-        return frame.dtsMillis() == null ? frame.ptsMillis() : frame.dtsMillis();
+        return frame.ptsMillis() == null ? frame.dtsMillis() : frame.ptsMillis();
     }
 
     private static String normalizeTrackId(String trackId) {
