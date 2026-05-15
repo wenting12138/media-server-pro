@@ -35,6 +35,28 @@ final class WebRtcH264ProfileDecisionPolicyTest {
         Assertions.assertEquals(TransformDecision.TRANSCODE, decision);
     }
 
+    @Test
+    void choosesTranscodeForMainProfile() {
+        WebRtcH264ProfileDecisionPolicy policy = new WebRtcH264ProfileDecisionPolicy();
+        TransformDecision decision = policy.decide(
+                new StreamKey(StreamProtocol.RTMP, "live", "main"),
+                frame("4d001f"),
+                TransformDecision.PENDING
+        );
+        Assertions.assertEquals(TransformDecision.TRANSCODE, decision);
+    }
+
+    @Test
+    void choosesTranscodeForHighProfile() {
+        WebRtcH264ProfileDecisionPolicy policy = new WebRtcH264ProfileDecisionPolicy();
+        TransformDecision decision = policy.decide(
+                new StreamKey(StreamProtocol.RTMP, "live", "high"),
+                frame("64001f"),
+                TransformDecision.PENDING
+        );
+        Assertions.assertEquals(TransformDecision.TRANSCODE, decision);
+    }
+
     private CanonicalVideoFrame frame(String profileLevelId) {
         return new CanonicalVideoFrame(
                 new InboundMediaFrame(

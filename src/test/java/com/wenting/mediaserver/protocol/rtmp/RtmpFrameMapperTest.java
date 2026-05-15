@@ -36,6 +36,56 @@ class RtmpFrameMapperTest {
     }
 
     @Test
+    void shouldMapEnhancedAvcSequenceStartToInboundFrame() {
+        RtmpSession session = new RtmpSession("rtmp-session");
+        session.streamKey(new StreamKey(StreamProtocol.RTMP, "live", "cam01"));
+        RtmpVideoFrameMapper mapper = new RtmpVideoFrameMapper();
+
+        InboundMediaFrame frame = mapper.map(
+                session,
+                new RtmpVideoMessage(
+                        6,
+                        100L,
+                        1,
+                        new byte[]{(byte) 0x90, 0x61, 0x76, 0x63, 0x31, 0x01, 0x64, 0x00, 0x1F}
+                ),
+                null
+        );
+
+        assertEquals(CodecType.H264, frame.codecType());
+        assertTrue(frame.keyFrame());
+        assertTrue(frame.configFrame());
+        assertEquals(Long.valueOf(100L), frame.dtsMillis());
+        assertEquals(Long.valueOf(100L), frame.ptsMillis());
+        assertArrayEquals(new byte[]{0x01, 0x64, 0x00, 0x1F}, frame.payload());
+    }
+
+    @Test
+    void shouldMapEnhancedAvcCodedFramesToInboundFrame() {
+        RtmpSession session = new RtmpSession("rtmp-session");
+        session.streamKey(new StreamKey(StreamProtocol.RTMP, "live", "cam01"));
+        RtmpVideoFrameMapper mapper = new RtmpVideoFrameMapper();
+
+        InboundMediaFrame frame = mapper.map(
+                session,
+                new RtmpVideoMessage(
+                        6,
+                        100L,
+                        1,
+                        new byte[]{(byte) 0x91, 0x61, 0x76, 0x63, 0x31, 0x00, 0x00, 0x05, 0x11, 0x22}
+                ),
+                null
+        );
+
+        assertEquals(CodecType.H264, frame.codecType());
+        assertTrue(frame.keyFrame());
+        assertFalse(frame.configFrame());
+        assertEquals(Long.valueOf(100L), frame.dtsMillis());
+        assertEquals(Long.valueOf(105L), frame.ptsMillis());
+        assertArrayEquals(new byte[]{0x11, 0x22}, frame.payload());
+    }
+
+    @Test
     void shouldMapAacConfigMessageToInboundFrame() {
         RtmpSession session = new RtmpSession("rtmp-session");
         session.streamKey(new StreamKey(StreamProtocol.RTMP, "live", "cam01"));

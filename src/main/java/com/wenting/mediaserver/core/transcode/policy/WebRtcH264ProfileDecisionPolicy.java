@@ -23,7 +23,7 @@ public final class WebRtcH264ProfileDecisionPolicy implements TranscodeDecisionP
             return TransformDecision.PENDING;
         }
         int profileIdc = parseProfileIdc(config.profileLevelId());
-        if (profileIdc == 0x42 || profileIdc == 0x4d || profileIdc == 0x64) {
+        if (profileIdc == 0x42) {
             return TransformDecision.PASSTHROUGH;
         }
         return TransformDecision.TRANSCODE;

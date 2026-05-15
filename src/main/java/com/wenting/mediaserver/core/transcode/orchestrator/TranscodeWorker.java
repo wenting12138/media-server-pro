@@ -137,7 +137,15 @@ final class TranscodeWorker implements Runnable {
                         ? TransformDecision.TRANSCODE
                         : decisionPolicy.decide(sourceKey, frame, transformDecision);
                 if (nextDecision != transformDecision) {
-                    log.info("Stream transform decision source={} derived={} decision={}", sourceKey, derivedKey, nextDecision);
+                    log.info(
+                            "Stream transform decision source={} derived={} decision={} profile-level-id={} keyFrame={} configFrame={}",
+                            sourceKey,
+                            derivedKey,
+                            nextDecision,
+                            frame.h264CodecConfig() == null ? null : frame.h264CodecConfig().profileLevelId(),
+                            frame.keyFrame(),
+                            frame.configFrame()
+                    );
                     transformDecision = nextDecision;
                 }
                 if (transformDecision == TransformDecision.PENDING) {
