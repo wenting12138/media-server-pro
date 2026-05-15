@@ -1,0 +1,168 @@
+package com.wenting.mediaserver.core.transcode.orchestrator;
+
+import com.wenting.mediaserver.core.enums.StreamProtocol;
+import com.wenting.mediaserver.core.enums.publish.CodecType;
+import com.wenting.mediaserver.core.enums.publish.TrackType;
+import com.wenting.mediaserver.core.model.StreamKey;
+import com.wenting.mediaserver.core.publish.DefaultPublishedStream;
+import com.wenting.mediaserver.core.publish.InboundMediaFrame;
+import com.wenting.mediaserver.core.transcode.canonical.CanonicalVideoFrame;
+import com.wenting.mediaserver.core.transcode.canonical.H264CodecConfig;
+import com.wenting.mediaserver.core.transcode.canonical.VideoFrameCanonicalizer;
+import com.wenting.mediaserver.core.transcode.canonical.VideoPayloadFormat;
+import com.wenting.mediaserver.core.transcode.engine.VideoFrameTranscoder;
+import com.wenting.mediaserver.core.transcode.engine.VideoFrameTranscoderFactory;
+import com.wenting.mediaserver.core.transcode.policy.TransformDecision;
+import com.wenting.mediaserver.core.transcode.policy.TranscodeDecisionPolicy;
+import com.wenting.mediaserver.core.transcode.publish.DerivedStreamPublisher;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
+
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+
+final class TranscodeWorkerRealtimeQueueTest {
+
+    @Test
+    void shouldTrimBacklogAndKeepLatestFrameWhenTranscoderFallsBehind() throws Exception {
+        StreamKey sourceKey = new StreamKey(StreamProtocol.RTMP, "live", "camera");
+        StreamKey derivedKey = new StreamKey(StreamProtocol.RTMP, "live", "camera__webrtc");
+        CollectingPublisher publisher = new CollectingPublisher();
+        TranscodeWorker worker = TranscodeWorker.start(
+                sourceKey,
+                derivedKey,
+                publisher,
+                new IdentityCanonicalizer(),
+                new SlowPassthroughTranscoderFactory(),
+                new AlwaysTranscodeDecisionPolicy(),
+                3
+        );
+        try {
+            worker.enqueueFrame(frame(0, true, true));
+            worker.enqueueFrame(frame(1, true, false));
+            for (int i = 2; i <= 10; i++) {
+                worker.enqueueFrame(frame(i, false, false));
+            }
+
+            waitForLastPayload(publisher.frames(), (byte) 10, 5000L);
+
+            List<InboundMediaFrame> outputs = publisher.frames();
+            Assertions.assertFalse(outputs.isEmpty());
+            Assertions.assertTrue(outputs.size() < 11, "expected aggressive backlog trimming");
+            Assertions.assertTrue(containsPayload(outputs, (byte) 10), "latest frame should survive trimming");
+        } finally {
+            worker.stop();
+        }
+    }
+
+    private static void waitForLastPayload(List<InboundMediaFrame> outputs, byte payloadByte, long timeoutMs) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + timeoutMs;
+        while (System.currentTimeMillis() < deadline) {
+            if (containsPayload(outputs, payloadByte)) {
+                return;
+            }
+            Thread.sleep(50L);
+        }
+        Assertions.fail("Timed out waiting for payload byte " + payloadByte);
+    }
+
+    private static boolean containsPayload(List<InboundMediaFrame> outputs, byte payloadByte) {
+        for (InboundMediaFrame frame : outputs) {
+            if (frame != null && frame.payload() != null && frame.payloadLength() > 0 && frame.payload()[0] == payloadByte) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static InboundMediaFrame frame(int index, boolean keyFrame, boolean configFrame) {
+        return new InboundMediaFrame(
+                StreamProtocol.RTMP,
+                TrackType.VIDEO,
+                CodecType.H264,
+                "session-" + index,
+                new StreamKey(StreamProtocol.RTMP, "live", "camera"),
+                "video-h264",
+                Long.valueOf(index),
+                Long.valueOf(index),
+                keyFrame,
+                configFrame,
+                null,
+                new byte[]{(byte) index}
+        );
+    }
+
+    private static final class CollectingPublisher implements DerivedStreamPublisher {
+
+        private final List<InboundMediaFrame> frames = new CopyOnWriteArrayList<InboundMediaFrame>();
+
+        @Override
+        public DefaultPublishedStream ensureStream(StreamKey derivedKey) {
+            return new DefaultPublishedStream(derivedKey);
+        }
+
+        @Override
+        public void publish(StreamKey derivedKey, InboundMediaFrame frame) {
+            if (frame != null) {
+                frames.add(frame);
+            }
+        }
+
+        @Override
+        public void removeStream(StreamKey derivedKey) {
+        }
+
+        List<InboundMediaFrame> frames() {
+            return frames;
+        }
+    }
+
+    private static final class IdentityCanonicalizer implements VideoFrameCanonicalizer {
+
+        @Override
+        public CanonicalVideoFrame canonicalize(InboundMediaFrame frame) {
+            return new CanonicalVideoFrame(
+                    frame,
+                    VideoPayloadFormat.H264_AVCC,
+                    frame.payload(),
+                    frame.keyFrame(),
+                    frame.configFrame(),
+                    new H264CodecConfig(4, new byte[]{0x67, 0x42, 0x00, 0x1f}, new byte[]{0x68, 0x00}, "42001f")
+            );
+        }
+
+        @Override
+        public void close() {
+        }
+    }
+
+    private static final class SlowPassthroughTranscoderFactory implements VideoFrameTranscoderFactory {
+
+        @Override
+        public VideoFrameTranscoder create() {
+            return new VideoFrameTranscoder() {
+                @Override
+                public List<InboundMediaFrame> transcode(CanonicalVideoFrame frame, StreamKey derivedKey) {
+                    try {
+                        Thread.sleep(150L);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                    return java.util.Collections.singletonList(frame.sourceFrame());
+                }
+
+                @Override
+                public void close() {
+                }
+            };
+        }
+    }
+
+    private static final class AlwaysTranscodeDecisionPolicy implements TranscodeDecisionPolicy {
+
+        @Override
+        public TransformDecision decide(StreamKey sourceKey, CanonicalVideoFrame frame, TransformDecision currentDecision) {
+            return TransformDecision.TRANSCODE;
+        }
+    }
+}

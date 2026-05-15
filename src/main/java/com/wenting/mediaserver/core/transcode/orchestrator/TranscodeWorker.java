@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 final class TranscodeWorker implements Runnable {
 
@@ -31,6 +32,7 @@ final class TranscodeWorker implements Runnable {
     private final TranscodeDecisionPolicy decisionPolicy;
     private final ArrayBlockingQueue<CanonicalVideoFrame> queue;
     private final AtomicBoolean running = new AtomicBoolean(true);
+    private final AtomicLong backlogTrimCount = new AtomicLong(0);
     private final Thread thread;
     private volatile TransformDecision transformDecision = TransformDecision.PENDING;
     private volatile VideoFrameTranscoder transcoder;
@@ -120,8 +122,48 @@ final class TranscodeWorker implements Runnable {
             return;
         }
         if (!queue.offer(canonicalFrame)) {
-            queue.poll();
-            queue.offer(canonicalFrame);
+            trimBacklogForRealtime(canonicalFrame);
+        }
+    }
+
+    private void trimBacklogForRealtime(CanonicalVideoFrame incomingFrame) {
+        CanonicalVideoFrame latestConfigFrame = null;
+        CanonicalVideoFrame latestKeyFrame = null;
+        int dropped = 0;
+        CanonicalVideoFrame queuedFrame;
+        while ((queuedFrame = queue.poll()) != null) {
+            dropped++;
+            if (queuedFrame.configFrame()) {
+                latestConfigFrame = queuedFrame;
+                continue;
+            }
+            if (queuedFrame.keyFrame()) {
+                latestKeyFrame = queuedFrame;
+            }
+        }
+        if (latestConfigFrame != null
+                && latestConfigFrame != incomingFrame
+                && !incomingFrame.configFrame()) {
+            queue.offer(latestConfigFrame);
+        }
+        if (latestKeyFrame != null
+                && latestKeyFrame != incomingFrame
+                && !incomingFrame.keyFrame()
+                && !latestKeyFrame.configFrame()) {
+            queue.offer(latestKeyFrame);
+        }
+        queue.offer(incomingFrame);
+        long trim = backlogTrimCount.incrementAndGet();
+        if (trim == 1 || trim % 20 == 0) {
+            log.warn(
+                    "Trimmed stream transform backlog source={} derived={} droppedFrames={} queueSize={} incomingKey={} incomingConfig={}",
+                    sourceKey,
+                    derivedKey,
+                    dropped,
+                    queue.size(),
+                    incomingFrame.keyFrame(),
+                    incomingFrame.configFrame()
+            );
         }
     }
 

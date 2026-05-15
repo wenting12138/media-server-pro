@@ -26,7 +26,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class WebRtcPlaybackStreamTransformOrchestrator implements StreamTransformOrchestrator {
 
     private static final Logger log = LoggerFactory.getLogger(WebRtcPlaybackStreamTransformOrchestrator.class);
-    private static final int DEFAULT_QUEUE_SIZE = 128;
+    private static final int DEFAULT_QUEUE_SIZE = 24;
 
     private final com.wenting.mediaserver.core.registry.StreamRegistry registry;
     private final DerivedStreamPublisher publisher;

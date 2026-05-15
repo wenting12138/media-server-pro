@@ -260,7 +260,7 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
             );
             byte[] srtpPacket = transform.protect(rtpPacket);
             logFirstSrtpPacket(frame, payloadType, clockRate, target, srtpPacket.length, chunk.marker());
-            logPacketCount();
+//            logPacketCount();
             datagramIo.send(srtpPacket, target).exceptionally(ex -> {
                 log.warn("Failed to send WebRTC SRTP packet session={} stream={} target={}",
                         sessionId, streamKey, target, ex);
