@@ -23,6 +23,7 @@ import java.util.concurrent.atomic.AtomicLong;
 final class TranscodeWorker implements Runnable {
 
     private static final Logger log = LoggerFactory.getLogger(TranscodeWorker.class);
+    private static final long STALE_VIDEO_FRAME_DROP_THRESHOLD_MS = 250L;
 
     private final StreamKey sourceKey;
     private final StreamKey derivedKey;
@@ -33,6 +34,7 @@ final class TranscodeWorker implements Runnable {
     private final ArrayBlockingQueue<CanonicalVideoFrame> queue;
     private final AtomicBoolean running = new AtomicBoolean(true);
     private final AtomicLong backlogTrimCount = new AtomicLong(0);
+    private final AtomicLong staleDropCount = new AtomicLong(0);
     private final Thread thread;
     private final AtomicBoolean playbackActive = new AtomicBoolean(false);
     private volatile TransformDecision transformDecision = TransformDecision.PENDING;
@@ -40,6 +42,7 @@ final class TranscodeWorker implements Runnable {
     private final AtomicBoolean keyFrameRequestPending = new AtomicBoolean(false);
     private volatile CanonicalVideoFrame latestStartupConfigFrame;
     private volatile CanonicalVideoFrame latestStartupKeyFrame;
+    private volatile long latestObservedMediaTimestampMs = Long.MIN_VALUE;
 
     private TranscodeWorker(
             StreamKey sourceKey,
@@ -134,6 +137,7 @@ final class TranscodeWorker implements Runnable {
             return;
         }
         rememberStartupFrame(canonicalFrame);
+        rememberObservedTimestamp(canonicalFrame);
         if (!playbackActive.get()) {
             return;
         }
@@ -146,6 +150,7 @@ final class TranscodeWorker implements Runnable {
         }
         for (CanonicalVideoFrame canonicalFrame : canonicalizer.canonicalize(packet, track)) {
             rememberStartupFrame(canonicalFrame);
+            rememberObservedTimestamp(canonicalFrame);
             if (!playbackActive.get()) {
                 continue;
             }
@@ -171,6 +176,16 @@ final class TranscodeWorker implements Runnable {
         }
         if (frame.keyFrame() && !frame.configFrame()) {
             latestStartupKeyFrame = frame;
+        }
+    }
+
+    private void rememberObservedTimestamp(CanonicalVideoFrame frame) {
+        Long timestampMs = mediaTimestampMillis(frame);
+        if (timestampMs == null) {
+            return;
+        }
+        if (timestampMs.longValue() > latestObservedMediaTimestampMs) {
+            latestObservedMediaTimestampMs = timestampMs.longValue();
         }
     }
 
@@ -241,6 +256,9 @@ final class TranscodeWorker implements Runnable {
                 if (frame == null) {
                     continue;
                 }
+                if (shouldDropStaleFrame(frame)) {
+                    continue;
+                }
                 TransformDecision nextDecision = decisionPolicy == null
                         ? TransformDecision.TRANSCODE
                         : decisionPolicy.decide(sourceKey, frame, transformDecision);
@@ -281,6 +299,35 @@ final class TranscodeWorker implements Runnable {
                 log.warn("Stream transform failed source={} derived={}", sourceKey, derivedKey, e);
             }
         }
+    }
+
+    private boolean shouldDropStaleFrame(CanonicalVideoFrame frame) {
+        if (frame == null || frame.configFrame() || frame.keyFrame()) {
+            return false;
+        }
+        Long frameTimestampMs = mediaTimestampMillis(frame);
+        long latestTimestampMs = latestObservedMediaTimestampMs;
+        if (frameTimestampMs == null || latestTimestampMs == Long.MIN_VALUE) {
+            return false;
+        }
+        long lagMs = latestTimestampMs - frameTimestampMs.longValue();
+        if (lagMs <= STALE_VIDEO_FRAME_DROP_THRESHOLD_MS) {
+            return false;
+        }
+        long count = staleDropCount.incrementAndGet();
+        if (count == 1 || count % 20 == 0) {
+            log.warn("Dropped stale video transform frame source={} derived={} lagMs={} dropped={} keyFrame={} configFrame={}",
+                    sourceKey, derivedKey, lagMs, count, frame.keyFrame(), frame.configFrame());
+        }
+        return true;
+    }
+
+    private Long mediaTimestampMillis(CanonicalVideoFrame frame) {
+        if (frame == null || frame.sourceFrame() == null) {
+            return null;
+        }
+        InboundMediaFrame sourceFrame = frame.sourceFrame();
+        return sourceFrame.ptsMillis() == null ? sourceFrame.dtsMillis() : sourceFrame.ptsMillis();
     }
 
     private InboundMediaFrame copyAsDerivedFrame(InboundMediaFrame sourceFrame) {

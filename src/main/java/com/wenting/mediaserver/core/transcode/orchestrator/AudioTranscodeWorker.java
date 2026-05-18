@@ -23,6 +23,7 @@ import java.util.concurrent.atomic.AtomicLong;
 final class AudioTranscodeWorker implements Runnable {
 
     private static final Logger log = LoggerFactory.getLogger(AudioTranscodeWorker.class);
+    private static final long STALE_AUDIO_FRAME_DROP_THRESHOLD_MS = 200L;
 
     private final StreamKey sourceKey;
     private final StreamKey derivedKey;
@@ -33,12 +34,14 @@ final class AudioTranscodeWorker implements Runnable {
     private final ArrayBlockingQueue<CanonicalAudioFrame> queue;
     private final AtomicBoolean running = new AtomicBoolean(true);
     private final AtomicLong backlogTrimCount = new AtomicLong(0);
+    private final AtomicLong staleDropCount = new AtomicLong(0);
     private final Thread thread;
     private final AtomicBoolean playbackActive = new AtomicBoolean(false);
     private volatile TransformDecision transformDecision = TransformDecision.PENDING;
     private volatile AudioFrameTranscoder transcoder;
     private volatile CanonicalAudioFrame latestStartupConfigFrame;
     private volatile CanonicalAudioFrame latestStartupMediaFrame;
+    private volatile long latestObservedMediaTimestampMs = Long.MIN_VALUE;
 
     private AudioTranscodeWorker(
             StreamKey sourceKey,
@@ -107,6 +110,7 @@ final class AudioTranscodeWorker implements Runnable {
         CanonicalAudioFrame canonicalFrame = canonicalizer.canonicalize(frame);
         if (canonicalFrame != null) {
             rememberStartupFrame(canonicalFrame);
+            rememberObservedTimestamp(canonicalFrame);
             if (!playbackActive.get()) {
                 return;
             }
@@ -120,6 +124,7 @@ final class AudioTranscodeWorker implements Runnable {
         }
         for (CanonicalAudioFrame canonicalFrame : canonicalizer.canonicalize(packet, track)) {
             rememberStartupFrame(canonicalFrame);
+            rememberObservedTimestamp(canonicalFrame);
             if (!playbackActive.get()) {
                 continue;
             }
@@ -150,6 +155,16 @@ final class AudioTranscodeWorker implements Runnable {
             latestStartupConfigFrame = frame;
         } else {
             latestStartupMediaFrame = frame;
+        }
+    }
+
+    private void rememberObservedTimestamp(CanonicalAudioFrame frame) {
+        Long timestampMs = mediaTimestampMillis(frame);
+        if (timestampMs == null) {
+            return;
+        }
+        if (timestampMs.longValue() > latestObservedMediaTimestampMs) {
+            latestObservedMediaTimestampMs = timestampMs.longValue();
         }
     }
 
@@ -215,6 +230,9 @@ final class AudioTranscodeWorker implements Runnable {
                 if (frame == null) {
                     continue;
                 }
+                if (shouldDropStaleFrame(frame)) {
+                    continue;
+                }
                 TransformDecision nextDecision = decisionPolicy == null
                         ? TransformDecision.TRANSCODE
                         : decisionPolicy.decide(sourceKey, frame, transformDecision);
@@ -251,6 +269,35 @@ final class AudioTranscodeWorker implements Runnable {
                 log.warn("Audio transform failed source={} derived={}", sourceKey, derivedKey, e);
             }
         }
+    }
+
+    private boolean shouldDropStaleFrame(CanonicalAudioFrame frame) {
+        if (frame == null || frame.configFrame()) {
+            return false;
+        }
+        Long frameTimestampMs = mediaTimestampMillis(frame);
+        long latestTimestampMs = latestObservedMediaTimestampMs;
+        if (frameTimestampMs == null || latestTimestampMs == Long.MIN_VALUE) {
+            return false;
+        }
+        long lagMs = latestTimestampMs - frameTimestampMs.longValue();
+        if (lagMs <= STALE_AUDIO_FRAME_DROP_THRESHOLD_MS) {
+            return false;
+        }
+        long count = staleDropCount.incrementAndGet();
+        if (count == 1 || count % 20 == 0) {
+            log.warn("Dropped stale audio transform frame source={} derived={} lagMs={} dropped={} configFrame={}",
+                    sourceKey, derivedKey, lagMs, count, frame.configFrame());
+        }
+        return true;
+    }
+
+    private Long mediaTimestampMillis(CanonicalAudioFrame frame) {
+        if (frame == null || frame.sourceFrame() == null) {
+            return null;
+        }
+        InboundMediaFrame sourceFrame = frame.sourceFrame();
+        return sourceFrame.ptsMillis() == null ? sourceFrame.dtsMillis() : sourceFrame.ptsMillis();
     }
 
     private InboundMediaFrame copyAsDerivedFrame(InboundMediaFrame sourceFrame) {

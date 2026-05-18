@@ -111,6 +111,39 @@ final class TranscodeWorkerRealtimeQueueTest {
         }
     }
 
+    @Test
+    void shouldDropStaleIntermediateFramesToFavorRealtime() throws Exception {
+        StreamKey sourceKey = new StreamKey(StreamProtocol.RTMP, "live", "camera");
+        StreamKey derivedKey = new StreamKey(StreamProtocol.RTMP, "live", "camera__webrtc");
+        CollectingPublisher publisher = new CollectingPublisher();
+        TranscodeWorker worker = TranscodeWorker.start(
+                sourceKey,
+                derivedKey,
+                publisher,
+                new IdentityCanonicalizer(),
+                new SlowPassthroughTranscoderFactory(),
+                new AlwaysTranscodeDecisionPolicy(),
+                10
+        );
+        try {
+            worker.setPlaybackActive(true);
+            worker.enqueueFrame(frame(0, true, true, 0L));
+            worker.enqueueFrame(frame(1, true, false, 40L));
+            worker.enqueueFrame(frame(2, false, false, 400L));
+            worker.enqueueFrame(frame(3, false, false, 800L));
+
+            waitForLastPayload(publisher.frames(), (byte) 3, 5000L);
+
+            List<InboundMediaFrame> outputs = publisher.frames();
+            Assertions.assertTrue(containsPayload(outputs, (byte) 0));
+            Assertions.assertTrue(containsPayload(outputs, (byte) 1));
+            Assertions.assertFalse(containsPayload(outputs, (byte) 2), "stale frame should be dropped");
+            Assertions.assertTrue(containsPayload(outputs, (byte) 3));
+        } finally {
+            worker.stop();
+        }
+    }
+
     private static void waitForLastPayload(List<InboundMediaFrame> outputs, byte payloadByte, long timeoutMs) throws InterruptedException {
         long deadline = System.currentTimeMillis() + timeoutMs;
         while (System.currentTimeMillis() < deadline) {
@@ -132,6 +165,10 @@ final class TranscodeWorkerRealtimeQueueTest {
     }
 
     private static InboundMediaFrame frame(int index, boolean keyFrame, boolean configFrame) {
+        return frame(index, keyFrame, configFrame, (long) index);
+    }
+
+    private static InboundMediaFrame frame(int index, boolean keyFrame, boolean configFrame, long timestampMs) {
         return new InboundMediaFrame(
                 StreamProtocol.RTMP,
                 TrackType.VIDEO,
@@ -139,8 +176,8 @@ final class TranscodeWorkerRealtimeQueueTest {
                 "session-" + index,
                 new StreamKey(StreamProtocol.RTMP, "live", "camera"),
                 "video-h264",
-                Long.valueOf(index),
-                Long.valueOf(index),
+                Long.valueOf(timestampMs),
+                Long.valueOf(timestampMs),
                 keyFrame,
                 configFrame,
                 null,

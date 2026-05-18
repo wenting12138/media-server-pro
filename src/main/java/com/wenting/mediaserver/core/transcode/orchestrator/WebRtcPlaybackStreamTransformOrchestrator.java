@@ -36,8 +36,8 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class WebRtcPlaybackStreamTransformOrchestrator implements StreamTransformOrchestrator {
 
     private static final Logger log = LoggerFactory.getLogger(WebRtcPlaybackStreamTransformOrchestrator.class);
-    private static final int DEFAULT_VIDEO_QUEUE_SIZE = 24;
-    private static final int DEFAULT_AUDIO_QUEUE_SIZE = 48;
+    private static final int DEFAULT_VIDEO_QUEUE_SIZE = 6;
+    private static final int DEFAULT_AUDIO_QUEUE_SIZE = 12;
 
     private final StreamRegistry registry;
     private final DerivedStreamPublisher publisher;
