@@ -814,15 +814,4 @@ public class IceAgent {
         }
     }
 
-    // ---- 内部类型 ----
-
-    private static class PendingSrflxRequest {
-        final InetSocketAddress server;
-        final byte[] transactionId;
-
-        PendingSrflxRequest(InetSocketAddress server, byte[] transactionId) {
-            this.server = server;
-            this.transactionId = transactionId;
-        }
-    }
 }
