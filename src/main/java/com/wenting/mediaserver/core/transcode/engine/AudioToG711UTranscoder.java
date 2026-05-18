@@ -20,6 +20,7 @@ import java.util.Collections;
 import java.util.List;
 
 import static org.bytedeco.ffmpeg.global.avcodec.AV_CODEC_ID_AAC;
+import static org.bytedeco.ffmpeg.global.avcodec.AV_CODEC_ID_OPUS;
 import static org.bytedeco.ffmpeg.global.avcodec.AV_CODEC_ID_PCM_ALAW;
 import static org.bytedeco.ffmpeg.global.avcodec.AV_CODEC_ID_PCM_MULAW;
 import static org.bytedeco.ffmpeg.global.avcodec.AV_INPUT_BUFFER_PADDING_SIZE;
@@ -178,6 +179,9 @@ public final class AudioToG711UTranscoder implements AudioFrameTranscoder {
     private int sourceCodecId(CodecType sourceCodecType) {
         if (sourceCodecType == CodecType.AAC || sourceCodecType == CodecType.MPEG4_GENERIC) {
             return AV_CODEC_ID_AAC;
+        }
+        if (sourceCodecType == CodecType.OPUS) {
+            return AV_CODEC_ID_OPUS;
         }
         if (sourceCodecType == CodecType.G711A) {
             return AV_CODEC_ID_PCM_ALAW;

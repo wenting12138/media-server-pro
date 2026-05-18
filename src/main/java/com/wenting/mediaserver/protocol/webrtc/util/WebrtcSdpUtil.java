@@ -266,15 +266,34 @@ public class WebrtcSdpUtil {
         }
     }
 
-    public static Integer answerPayloadType(SdpDescription.MediaDescription offeredMedia, MediaStreamTrack.Kind kind) {
+    public static Integer answerPayloadType(SdpDescription.MediaDescription offeredMedia, RTCRtpTransceiver transceiver) {
+        MediaStreamTrack.Kind kind = transceiver == null ? null : transceiver.getKind();
         if (kind == MediaStreamTrack.Kind.AUDIO) {
-            return findPayloadTypeByCodec(offeredMedia, "pcmu/");
+            if (prefersInboundAudioCodec(transceiver)) {
+                Integer opus = findPayloadTypeByCodec(offeredMedia, "opus/");
+                if (opus != null) {
+                    return opus;
+                }
+            }
+            Integer pcmu = findPayloadTypeByCodec(offeredMedia, "pcmu/");
+            if (pcmu != null) {
+                return pcmu;
+            }
+            return findPayloadTypeByCodec(offeredMedia, "pcma/");
         }
         Integer matched = findPayloadTypeByCodec(offeredMedia, "h264/");
         if (matched != null) {
             return matched;
         }
         return null;
+    }
+
+    private static boolean prefersInboundAudioCodec(RTCRtpTransceiver transceiver) {
+        if (transceiver == null || transceiver.getKind() != MediaStreamTrack.Kind.AUDIO) {
+            return false;
+        }
+        return transceiver.getDirection() == RTCRtpTransceiver.Direction.RECVONLY
+                && (transceiver.getSender() == null || transceiver.getSender().getTrack() == null);
     }
 
     public static String answerRtpMap(SdpDescription.MediaDescription offeredMedia, int payloadType, MediaStreamTrack.Kind kind) {

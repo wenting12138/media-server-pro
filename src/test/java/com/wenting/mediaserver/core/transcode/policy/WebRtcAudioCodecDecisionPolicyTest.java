@@ -31,6 +31,14 @@ final class WebRtcAudioCodecDecisionPolicyTest {
     }
 
     @Test
+    void shouldTranscodeOpus() {
+        assertEquals(
+                TransformDecision.TRANSCODE,
+                policy.decide(streamKey(), frame(CodecType.OPUS, false), TransformDecision.PENDING)
+        );
+    }
+
+    @Test
     void shouldTranscodeG711A() {
         assertEquals(
                 TransformDecision.TRANSCODE,

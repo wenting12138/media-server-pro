@@ -20,6 +20,7 @@ public final class WebRtcAudioCodecDecisionPolicy implements AudioTransformDecis
         }
         if (codecType == CodecType.AAC
                 || codecType == CodecType.MPEG4_GENERIC
+                || codecType == CodecType.OPUS
                 || codecType == CodecType.G711A) {
             return TransformDecision.TRANSCODE;
         }

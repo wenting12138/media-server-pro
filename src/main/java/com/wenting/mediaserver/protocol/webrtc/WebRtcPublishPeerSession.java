@@ -175,12 +175,21 @@ public final class WebRtcPublishPeerSession implements AutoCloseable {
     }
 
     private boolean canReceive(RTCRtpTransceiver transceiver) {
-        return transceiver != null
-                && transceiver.getKind() == MediaStreamTrack.Kind.VIDEO
-                && transceiver.getNegotiatedCodecType() == CodecType.H264
-                && (transceiver.getDirection() == RTCRtpTransceiver.Direction.RECVONLY
-                || transceiver.getDirection() == RTCRtpTransceiver.Direction.SENDRECV)
-                && transceiver.getReceiver() != null;
+        if (transceiver == null
+                || transceiver.getReceiver() == null
+                || (transceiver.getDirection() != RTCRtpTransceiver.Direction.RECVONLY
+                && transceiver.getDirection() != RTCRtpTransceiver.Direction.SENDRECV)) {
+            return false;
+        }
+        if (transceiver.getKind() == MediaStreamTrack.Kind.VIDEO) {
+            return transceiver.getNegotiatedCodecType() == CodecType.H264;
+        }
+        if (transceiver.getKind() == MediaStreamTrack.Kind.AUDIO) {
+            return transceiver.getNegotiatedCodecType() == CodecType.OPUS
+                    || transceiver.getNegotiatedCodecType() == CodecType.G711A
+                    || transceiver.getNegotiatedCodecType() == CodecType.G711U;
+        }
+        return false;
     }
 
     private TrackType toTrackType(MediaStreamTrack.Kind kind) {

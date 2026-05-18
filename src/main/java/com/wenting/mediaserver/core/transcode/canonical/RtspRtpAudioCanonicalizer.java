@@ -44,7 +44,7 @@ public final class RtspRtpAudioCanonicalizer implements AudioFrameCanonicalizer 
             return Collections.emptyList();
         }
         CodecType codecType = sourceFrame.codecType();
-        if (codecType == CodecType.G711A || codecType == CodecType.G711U) {
+        if (codecType == CodecType.G711A || codecType == CodecType.G711U || codecType == CodecType.OPUS) {
             return Collections.singletonList(new CanonicalAudioFrame(
                     cloneFrame(sourceFrame, codecType, false, rtpPayload),
                     codecType,

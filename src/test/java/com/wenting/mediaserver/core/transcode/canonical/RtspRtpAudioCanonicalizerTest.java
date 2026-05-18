@@ -63,6 +63,21 @@ final class RtspRtpAudioCanonicalizerTest {
         }
     }
 
+    @Test
+    void extractsOpusPayloadFromRtpPacket() {
+        RtspRtpAudioCanonicalizer canonicalizer = new RtspRtpAudioCanonicalizer();
+        byte[] opusPayload = new byte[]{(byte) 0xF8, (byte) 0xFF, (byte) 0xFE};
+        try {
+            List<CanonicalAudioFrame> frames = canonicalizer.canonicalize(opusPacket(opusPayload), null);
+            Assertions.assertEquals(1, frames.size());
+            Assertions.assertFalse(frames.get(0).configFrame());
+            Assertions.assertEquals(CodecType.OPUS, frames.get(0).codecType());
+            Assertions.assertArrayEquals(opusPayload, frames.get(0).payload());
+        } finally {
+            canonicalizer.close();
+        }
+    }
+
     private InboundRtpPacket packet(byte[] accessUnit) {
         byte[] rtpPayload = new byte[4 + accessUnit.length];
         rtpPayload[0] = 0x00;
@@ -101,6 +116,38 @@ final class RtspRtpAudioCanonicalizerTest {
                 MediaPacketTransport.TCP_INTERLEAVED,
                 null,
                 Integer.valueOf(2)
+        );
+    }
+
+    private InboundRtpPacket opusPacket(byte[] payloadBytes) {
+        byte[] packet = new byte[12 + payloadBytes.length];
+        packet[0] = (byte) 0x80;
+        packet[1] = (byte) (0x80 | 111);
+        packet[4] = 0x00;
+        packet[5] = 0x00;
+        packet[6] = 0x04;
+        packet[7] = 0x00;
+        System.arraycopy(payloadBytes, 0, packet, 12, payloadBytes.length);
+        return new InboundRtpPacket(
+                new InboundMediaFrame(
+                        StreamProtocol.WEBRTC,
+                        TrackType.AUDIO,
+                        CodecType.OPUS,
+                        "webrtc-session",
+                        new StreamKey(StreamProtocol.WEBRTC, "live", "camera"),
+                        "audio-opus",
+                        null,
+                        null,
+                        false,
+                        false,
+                        null,
+                        packet
+                ),
+                48000,
+                false,
+                MediaPacketTransport.UDP,
+                null,
+                null
         );
     }
 }

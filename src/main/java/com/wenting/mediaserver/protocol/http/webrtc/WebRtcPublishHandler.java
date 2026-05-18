@@ -92,7 +92,7 @@ public final class WebRtcPublishHandler implements HttpRequestHandler {
             peerConnection.setRemoteDescription(offer);
             RTCSessionDescription answer = peerConnection.createAnswer().get();
             if (!hasSupportedIncomingH264(peerConnection)) {
-                writeJson(ctx, HttpResponseStatus.BAD_REQUEST, "{\"code\":-1,\"msg\":\"only H264 video publish is supported\"}");
+                writeJson(ctx, HttpResponseStatus.BAD_REQUEST, "{\"code\":-1,\"msg\":\"H264 video publish is required\"}");
                 return;
             }
             peerConnection.setLocalDescription(answer);

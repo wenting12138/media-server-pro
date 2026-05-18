@@ -2,6 +2,7 @@ package com.wenting.mediaserver.core.registry;
 
 import com.wenting.mediaserver.core.enums.StreamProtocol;
 import com.wenting.mediaserver.core.enums.publish.CodecType;
+import com.wenting.mediaserver.core.enums.publish.MediaPacketTransport;
 import com.wenting.mediaserver.core.enums.publish.TrackType;
 import com.wenting.mediaserver.core.model.StreamKey;
 import com.wenting.mediaserver.core.publish.DefaultPublishedStream;
@@ -83,6 +84,85 @@ final class StreamRegistryWebRtcAudioPlaybackTest {
         }
     }
 
+    @Test
+    void shouldTranscodeWebRtcOpusAudioPacketsIntoDerivedG711uFrames() throws Exception {
+        StreamRegistry registry = new StreamRegistry();
+        StreamTransformOrchestrator orchestrator = new WebRtcPlaybackStreamTransformOrchestrator(
+                registry,
+                registry.webRtcPlaybackSuffix()
+        );
+        registry.setStreamTransformOrchestrator(orchestrator);
+        try {
+            StreamKey sourceKey = new StreamKey(StreamProtocol.WEBRTC, "live", "mic02");
+            DefaultPublishedStream sourceStream = new DefaultPublishedStream(sourceKey);
+            registry.registerPublishedStream(sourceKey, sourceStream);
+
+            DefaultPublishedStream derivedStream = (DefaultPublishedStream) registry.findPublishedStreamByPath("live", "mic02__webrtc");
+            Assertions.assertNotNull(derivedStream);
+
+            RecordingSubscriber subscriber = new RecordingSubscriber();
+            derivedStream.addSubscriber(subscriber);
+
+            byte[] firstOpusPayload = new byte[]{(byte) 0xF8, (byte) 0xFF, (byte) 0xFE};
+            InboundRtpPacket firstOpusPacket = new InboundRtpPacket(
+                    new InboundMediaFrame(
+                            StreamProtocol.WEBRTC,
+                            TrackType.AUDIO,
+                            CodecType.OPUS,
+                            "publisher",
+                            sourceKey,
+                            "audio-opus",
+                            Long.valueOf(20L),
+                            Long.valueOf(20L),
+                            false,
+                            false,
+                            null,
+                            buildRtpPacket(111, 1, 960, 0x01020304L, firstOpusPayload)
+                    ),
+                    48000,
+                    false,
+                    MediaPacketTransport.TCP_INTERLEAVED,
+                    null,
+                    Integer.valueOf(2)
+            );
+            byte[] secondOpusPayload = new byte[]{(byte) 0xF8, (byte) 0xAA, (byte) 0xBB, (byte) 0xCC};
+            InboundRtpPacket secondOpusPacket = new InboundRtpPacket(
+                    new InboundMediaFrame(
+                            StreamProtocol.WEBRTC,
+                            TrackType.AUDIO,
+                            CodecType.OPUS,
+                            "publisher",
+                            sourceKey,
+                            "audio-opus",
+                            Long.valueOf(40L),
+                            Long.valueOf(40L),
+                            false,
+                            false,
+                            null,
+                            buildRtpPacket(111, 2, 1920, 0x01020304L, secondOpusPayload)
+                    ),
+                    48000,
+                    false,
+                    MediaPacketTransport.TCP_INTERLEAVED,
+                    null,
+                    Integer.valueOf(2)
+            );
+
+            sourceStream.onInboundRtpPacket(firstOpusPacket);
+            sourceStream.onInboundRtpPacket(secondOpusPacket);
+
+            waitForFrames(subscriber.frames, 1);
+
+            InboundMediaFrame derivedFrame = subscriber.frames.get(0);
+            Assertions.assertEquals(CodecType.G711U, derivedFrame.codecType());
+            Assertions.assertEquals("audio-g711u", derivedFrame.trackId());
+            Assertions.assertEquals("mic02__webrtc", derivedFrame.streamKey().stream());
+            Assertions.assertTrue(derivedFrame.payloadLength() > 0);
+        } finally {
+            orchestrator.close();
+        }
+    }
+
     private void waitForFrames(List<InboundMediaFrame> frames, int expectedSize) throws InterruptedException {
         long deadline = System.currentTimeMillis() + 3000L;
         while (System.currentTimeMillis() < deadline) {
@@ -117,5 +197,23 @@ final class StreamRegistryWebRtcAudioPlaybackTest {
                 frames.add(frame);
             }
         }
+    }
+
+    private static byte[] buildRtpPacket(int payloadType, int sequenceNumber, long timestamp, long ssrc, byte[] payload) {
+        byte[] packet = new byte[12 + payload.length];
+        packet[0] = (byte) 0x80;
+        packet[1] = (byte) (0x80 | (payloadType & 0x7F));
+        packet[2] = (byte) ((sequenceNumber >> 8) & 0xFF);
+        packet[3] = (byte) (sequenceNumber & 0xFF);
+        packet[4] = (byte) ((timestamp >> 24) & 0xFF);
+        packet[5] = (byte) ((timestamp >> 16) & 0xFF);
+        packet[6] = (byte) ((timestamp >> 8) & 0xFF);
+        packet[7] = (byte) (timestamp & 0xFF);
+        packet[8] = (byte) ((ssrc >> 24) & 0xFF);
+        packet[9] = (byte) ((ssrc >> 16) & 0xFF);
+        packet[10] = (byte) ((ssrc >> 8) & 0xFF);
+        packet[11] = (byte) (ssrc & 0xFF);
+        System.arraycopy(payload, 0, packet, 12, payload.length);
+        return packet;
     }
 }

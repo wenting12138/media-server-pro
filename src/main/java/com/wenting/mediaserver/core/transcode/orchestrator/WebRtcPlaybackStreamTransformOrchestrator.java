@@ -293,7 +293,7 @@ public final class WebRtcPlaybackStreamTransformOrchestrator implements StreamTr
         if (protocol == StreamProtocol.RTMP) {
             return new RtmpAudioCanonicalizer();
         }
-        if (protocol == StreamProtocol.RTSP) {
+        if (protocol == StreamProtocol.RTSP || protocol == StreamProtocol.WEBRTC) {
             return new RtspRtpAudioCanonicalizer();
         }
         log.debug("No audio frame canonicalizer registered yet for protocol={} source={}", protocol, sourceKey);
@@ -323,6 +323,7 @@ public final class WebRtcPlaybackStreamTransformOrchestrator implements StreamTr
         }
         return frame.codecType() == CodecType.AAC
                 || frame.codecType() == CodecType.MPEG4_GENERIC
+                || frame.codecType() == CodecType.OPUS
                 || frame.codecType() == CodecType.G711A
                 || frame.codecType() == CodecType.G711U;
     }

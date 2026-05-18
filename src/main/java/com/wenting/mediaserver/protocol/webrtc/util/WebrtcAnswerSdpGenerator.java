@@ -55,7 +55,7 @@ public class WebrtcAnswerSdpGenerator {
             return;
         }
 
-        Integer payloadType = WebrtcSdpUtil.answerPayloadType(offeredMedia, transceiver.getKind());
+        Integer payloadType = WebrtcSdpUtil.answerPayloadType(offeredMedia, transceiver);
         if (payloadType == null) {
             transceiver.setNegotiatedPayloadType(null);
             transceiver.setNegotiatedClockRate(null);

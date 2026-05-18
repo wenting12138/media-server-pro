@@ -33,6 +33,7 @@ final class AudioTranscodeWorker implements Runnable {
     private final AudioTransformDecisionPolicy decisionPolicy;
     private final ArrayBlockingQueue<CanonicalAudioFrame> queue;
     private final AtomicBoolean running = new AtomicBoolean(true);
+    private final AtomicBoolean firstDerivedOutputLogged = new AtomicBoolean(false);
     private final AtomicLong backlogTrimCount = new AtomicLong(0);
     private final AtomicLong staleDropCount = new AtomicLong(0);
     private final Thread thread;
@@ -260,6 +261,7 @@ final class AudioTranscodeWorker implements Runnable {
                 }
                 List<InboundMediaFrame> outputs = activeTranscoder.transcode(frame, derivedKey);
                 for (InboundMediaFrame output : outputs) {
+                    logFirstDerivedOutput(frame, output);
                     publisher.publish(derivedKey, output);
                 }
             } catch (InterruptedException e) {
@@ -333,6 +335,23 @@ final class AudioTranscodeWorker implements Runnable {
             }
             return transcoder;
         }
+    }
+
+    private void logFirstDerivedOutput(CanonicalAudioFrame input, InboundMediaFrame output) {
+        if (input == null || output == null) {
+            return;
+        }
+        if (!firstDerivedOutputLogged.compareAndSet(false, true)) {
+            return;
+        }
+        log.info("First derived audio frame source={} derived={} inputCodec={} outputCodec={} outputTrack={} bytes={} configFrame={}",
+                sourceKey,
+                derivedKey,
+                input.codecType(),
+                output.codecType(),
+                output.trackId(),
+                output.payloadLength(),
+                output.configFrame());
     }
 
     private void closeTranscoder() {
