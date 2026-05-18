@@ -6,9 +6,11 @@ import com.wenting.mediaserver.protocol.webrtc.api.RTCRtpTransceiver;
 import com.wenting.mediaserver.protocol.webrtc.core.ice.CandidateType;
 import com.wenting.mediaserver.protocol.webrtc.core.ice.IceAgent;
 import com.wenting.mediaserver.protocol.webrtc.core.ice.IceCandidate;
+import com.wenting.mediaserver.protocol.webrtc.core.sctp.SctpConstants;
 import com.wenting.mediaserver.protocol.webrtc.core.sdp.SdpBuilder;
 import com.wenting.mediaserver.protocol.webrtc.core.sdp.SdpDescription;
 import com.wenting.mediaserver.protocol.webrtc.core.sdp.SdpParser;
+import com.wenting.mediaserver.protocol.webrtc.transport.DatagramIo;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -23,9 +25,112 @@ public class WebrtcSdpUtil {
     private static final char[] CREDENTIAL_CHARS =
             "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".toCharArray();
 
-    // ========================================================================
-    // Utility — random credential generation
-    // ========================================================================
+    public static String buildOfferSdp(
+            IceAgent agent,
+            DatagramIo transport,
+            List<RTCRtpTransceiver> transceivers,
+            String localUfrag,
+            String localPwd,
+            String localFingerprint
+    ) {
+        InetSocketAddress localAddr = transport.getLocalAddress();
+        String host = localAddr.getAddress().isAnyLocalAddress()
+                ? "127.0.0.1" : localAddr.getHostString();
+        SdpBuilder builder = new SdpBuilder();
+        builder.setOrigin("-", System.currentTimeMillis(), host);
+
+        // Build BUNDLE mids dynamically: 0=app, 1..N=media
+        StringBuilder bundleMids = new StringBuilder("0");
+        for (int i = 0; i < transceivers.size(); i++) {
+            bundleMids.append(" ").append(i + 1);
+        }
+
+        // Session-level attributes
+        builder.addSessionAttribute("group", "BUNDLE " + bundleMids);
+        builder.addSessionAttribute("ice-ufrag", localUfrag);
+        builder.addSessionAttribute("ice-pwd", localPwd);
+        builder.addSessionAttribute("fingerprint", "sha-256 " + localFingerprint);
+        builder.addSessionAttribute("msid-semantic", " WMS");
+
+        // ===== Application (SCTP/DataChannel) media =====
+        SdpBuilder.MediaBuilder appMedia = builder.addMedia("application", 9, "DTLS/SCTP", 5000);
+        appMedia.addAttribute("mid", "0");
+        appMedia.addAttribute("setup", "actpass");
+        WebrtcSdpUtil.addCandidateAttributes(appMedia, agent);
+        appMedia.addAttribute("sctp-port", String.valueOf(SctpConstants.DEFAULT_OS));
+
+        // ===== Transceiver media sections =====
+        for (int i = 0; i < transceivers.size(); i++) {
+            RTCRtpTransceiver trans = transceivers.get(i);
+            String mediaType = trans.getKind() == MediaStreamTrack.Kind.AUDIO ? "audio" : "video";
+            int pt = trans.getKind() == MediaStreamTrack.Kind.AUDIO ? 111 : 96;
+            String codec = trans.getKind() == MediaStreamTrack.Kind.AUDIO
+                    ? "111 opus/48000/2" : "96 H264/90000";
+            trans.setNegotiatedPayloadType(Integer.valueOf(pt));
+            trans.setNegotiatedClockRate(Integer.valueOf(trans.getKind() == MediaStreamTrack.Kind.AUDIO ? 48000 : 90000));
+
+            SdpBuilder.MediaBuilder media = builder.addMedia(mediaType, 9, "UDP/TLS/RTP/SAVPF",
+                    trans.getKind() == MediaStreamTrack.Kind.AUDIO ? 111 : 96);
+            media.addAttribute("mid", String.valueOf(i + 1));
+            media.addAttribute("rtpmap", codec);
+            media.addAttribute("rtcp-mux");
+            media.addAttribute("setup", "actpass");
+
+            // Direction
+            switch (trans.getDirection()) {
+                case SENDRECV: media.addAttribute("sendrecv"); break;
+                case SENDONLY: media.addAttribute("sendonly"); break;
+                case RECVONLY: media.addAttribute("recvonly"); break;
+                case INACTIVE: media.addAttribute("inactive"); break;
+            }
+
+            // SSRC with cname
+            long ssrc = trans.getSender().getSsrc();
+            media.addAttribute("ssrc", ssrc + " cname:webrtc-java");
+
+            // MSID
+            MediaStreamTrack track = trans.getSender().getTrack();
+            if (track != null) {
+                media.addAttribute("msid", trans.getMid() + " " + track.getId());
+            }
+
+            // ICE candidates for this media section
+            WebrtcSdpUtil.addCandidateAttributes(media, agent);
+        }
+        return builder.build();
+    }
+
+    public static String buildAnswerSdp(IceAgent agent, SdpDescription offer,
+                                  DatagramIo transport,
+                                  List<RTCRtpTransceiver> transceivers,
+                                  String localUfrag,
+                                  String localPwd,
+                                  String localFingerprint) {
+        InetSocketAddress localAddr = transport.getLocalAddress();
+        String host = localAddr.getAddress().isAnyLocalAddress()
+                ? "127.0.0.1" : localAddr.getHostString();
+        SdpBuilder builder = new SdpBuilder();
+        builder.setOrigin("-", System.currentTimeMillis(), host);
+
+        builder.addSessionAttribute("group", "BUNDLE " + WebrtcAnswerSdpGenerator.answerBundleMids(offer));
+        builder.addSessionAttribute("ice-ufrag", localUfrag);
+        builder.addSessionAttribute("ice-pwd", localPwd);
+        builder.addSessionAttribute("fingerprint", "sha-256 " + localFingerprint);
+        builder.addSessionAttribute("msid-semantic", " WMS");
+
+        for (SdpDescription.MediaDescription offeredMedia : offer.getMediaDescriptions()) {
+            if ("application".equals(offeredMedia.mediaType)) {
+                WebrtcAnswerSdpGenerator.appendApplicationAnswer(builder, offeredMedia, agent);
+                continue;
+            }
+            if ("audio".equals(offeredMedia.mediaType) || "video".equals(offeredMedia.mediaType)) {
+                WebrtcAnswerSdpGenerator.appendMediaAnswer(transceivers, builder, offeredMedia, agent);
+            }
+        }
+
+        return builder.build();
+    }
+
 
     public static String generateCredential(SecureRandom random, int length) {
         char[] chars = new char[length];
