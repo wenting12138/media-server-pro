@@ -7,6 +7,10 @@ import com.wenting.mediaserver.protocol.webrtc.core.dtls.DtlsHandshake;
 import com.wenting.mediaserver.protocol.webrtc.core.dtls.UdpDatagramTransport;
 import com.wenting.mediaserver.protocol.webrtc.core.ice.*;
 import com.wenting.mediaserver.protocol.webrtc.core.sctp.SctpAssociation;
+import com.wenting.mediaserver.protocol.webrtc.util.ReportPacketUtil;
+import com.wenting.mediaserver.protocol.webrtc.util.WebrtcAnswerSdpGenerator;
+import com.wenting.mediaserver.protocol.webrtc.util.WebrtcPacketUtil;
+import com.wenting.mediaserver.protocol.webrtc.util.WebrtcSdpUtil;
 import org.bouncycastle.tls.CipherSuite;
 import org.bouncycastle.tls.DTLSTransport;
 import com.wenting.mediaserver.protocol.webrtc.core.rtp.RtpPacket;
@@ -25,6 +29,7 @@ import com.wenting.mediaserver.protocol.webrtc.transport.UdpTransport;
 import com.wenting.mediaserver.core.codec.rtcp.RtcpGenericNackPacket;
 import com.wenting.mediaserver.core.codec.rtcp.RtcpPacket;
 import com.wenting.mediaserver.core.codec.rtcp.RtcpPictureLossIndicationPacket;
+import com.wenting.mediaserver.core.codec.rtcp.RtcpReportBlock;
 import com.wenting.mediaserver.core.codec.rtp.RtpPacketParser;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -71,6 +76,7 @@ public class RTCPeerConnection implements AutoCloseable {
     public volatile Consumer<RTCIceCandidate> onIceCandidate;
     public volatile Consumer<DataChannel> onDataChannel;
     public volatile Consumer<RTCRtpReceiver> ontrack;
+    public volatile Consumer<RtcpPacket> onRtcpPacket;
     public volatile Consumer<IceConnectionState> onIceConnectionStateChange;
     public volatile Consumer<ConnectionState> onConnectionStateChange;
 
@@ -85,7 +91,6 @@ public class RTCPeerConnection implements AutoCloseable {
 
     // DTLS receive queue — populated by dispatch handler, consumed by DTLS
     private final LinkedBlockingQueue<byte[]> dtlsReceiveQueue = new LinkedBlockingQueue<>();
-    private final AtomicBoolean firstDtlsPacketLogged = new AtomicBoolean(false);
 
     // ---- Media / SRTP ----
     private final List<RTCRtpTransceiver> transceivers = new CopyOnWriteArrayList<>();
@@ -141,7 +146,7 @@ public class RTCPeerConnection implements AutoCloseable {
     // ========================================================================
 
     public RTCPeerConnection() throws RTCPeerConnectionException {
-        this(createOwnedTransport(), true);
+        this(new UdpTransport(0), true);
     }
 
     /**
@@ -166,8 +171,8 @@ public class RTCPeerConnection implements AutoCloseable {
 
         // Generate ICE credentials
         SecureRandom random = new SecureRandom();
-        this.localUfrag = generateCredential(random, 4);
-        this.localPwd = generateCredential(random, 22);
+        this.localUfrag = WebrtcSdpUtil.generateCredential(random, 4);
+        this.localPwd = WebrtcSdpUtil.generateCredential(random, 22);
 
         // Pre-generate DTLS certificate + fingerprint
         try {
@@ -188,10 +193,6 @@ public class RTCPeerConnection implements AutoCloseable {
 
         // Set up STUN/DTLS demux handler
         setupPacketHandler();
-    }
-
-    private static DatagramIo createOwnedTransport() {
-        return new UdpTransport(0);
     }
 
     // ========================================================================
@@ -255,7 +256,7 @@ public class RTCPeerConnection implements AutoCloseable {
         try {
             SdpDescription parsed = SdpParser.parse(desc.getSdp());
             this.remoteSdp = parsed;
-            this.sctpNegotiated = hasSctpMedia(parsed);
+            this.sctpNegotiated = WebrtcSdpUtil.hasSctpMedia(parsed);
 
             this.remoteUfrag = parsed.getIceUfrag();
             this.remotePwd = parsed.getIcePwd();
@@ -293,7 +294,7 @@ public class RTCPeerConnection implements AutoCloseable {
             ? MediaStreamTrack.Kind.AUDIO : MediaStreamTrack.Kind.VIDEO;
         Long remoteSsrc = md.getSsrc();
 
-        RTCRtpTransceiver.Direction remoteDirection = extractDirection(md);
+        RTCRtpTransceiver.Direction remoteDirection = WebrtcSdpUtil.extractDirection(md);
 
         if (isOffer) {
             // Create receiver + sender (sender with local SSRC)
@@ -307,7 +308,7 @@ public class RTCPeerConnection implements AutoCloseable {
             RTCRtpTransceiver transceiver = new RTCRtpTransceiver(mid, kind, sender, receiver);
 
             // Set direction based on remote's direction (we start as recvonly)
-            transceiver.setDirection(invertDirection(remoteDirection));
+            transceiver.setDirection(WebrtcSdpUtil.invertDirection(remoteDirection));
 
             transceivers.add(transceiver);
             LOG.info("Created " + kind + " transceiver mid=" + mid + " remote-ssrc=" + remoteSsrc);
@@ -341,7 +342,7 @@ public class RTCPeerConnection implements AutoCloseable {
                 }
                 RTCRtpSender sender = new RTCRtpSender(null, nextSsrc.getAndIncrement());
                 RTCRtpTransceiver transceiver = new RTCRtpTransceiver(mid, kind, sender, receiver);
-                transceiver.setDirection(invertDirection(remoteDirection));
+                transceiver.setDirection(WebrtcSdpUtil.invertDirection(remoteDirection));
                 transceivers.add(transceiver);
                 LOG.info("Created " + kind + " transceiver from answer mid=" + mid + " remote-ssrc=" + remoteSsrc);
 
@@ -353,26 +354,6 @@ public class RTCPeerConnection implements AutoCloseable {
         }
     }
 
-    private static RTCRtpTransceiver.Direction extractDirection(MediaDescription md) {
-        for (SdpDescription.Attribute attr : md.attributes) {
-            if (attr.value == null) {
-                if ("sendrecv".equals(attr.key)) return RTCRtpTransceiver.Direction.SENDRECV;
-                if ("sendonly".equals(attr.key)) return RTCRtpTransceiver.Direction.SENDONLY;
-                if ("recvonly".equals(attr.key)) return RTCRtpTransceiver.Direction.RECVONLY;
-                if ("inactive".equals(attr.key)) return RTCRtpTransceiver.Direction.INACTIVE;
-            }
-        }
-        return RTCRtpTransceiver.Direction.RECVONLY;
-    }
-
-    private static RTCRtpTransceiver.Direction invertDirection(RTCRtpTransceiver.Direction dir) {
-        switch (dir) {
-            case SENDONLY: return RTCRtpTransceiver.Direction.RECVONLY;
-            case RECVONLY: return RTCRtpTransceiver.Direction.SENDONLY;
-            case SENDRECV: return RTCRtpTransceiver.Direction.RECVONLY;
-            default: return RTCRtpTransceiver.Direction.INACTIVE;
-        }
-    }
 
     // ========================================================================
     // Public API — ICE
@@ -388,7 +369,7 @@ public class RTCPeerConnection implements AutoCloseable {
             throw new RTCPeerConnectionException("ICE agent not initialized (call createOffer/createAnswer first)");
         }
 
-        IceCandidate parsed = parseCandidate(candidate.getCandidate(), remoteUfrag);
+        IceCandidate parsed = WebrtcSdpUtil.parseCandidate(candidate.getCandidate(), remoteUfrag);
         if (parsed != null) {
             iceAgent.addRemoteCandidate(parsed);
         }
@@ -483,6 +464,24 @@ public class RTCPeerConnection implements AutoCloseable {
         }
     }
 
+    public boolean sendReceiverReport(long senderSsrc, RtcpReportBlock reportBlock) {
+        if (reportBlock == null) {
+            return false;
+        }
+        InetSocketAddress addr = remoteAddress;
+        SrtpCryptoContext context = resolveInboundSrtcpContext();
+        if (addr == null || context == null) {
+            return false;
+        }
+        byte[] plainRtcp = ReportPacketUtil.encodeReceiverReportPacket(senderSsrc, Collections.singletonList(reportBlock));
+        byte[] protectedRtcp = new SrtcpTransform(context).protect(plainRtcp);
+        transport.send(protectedRtcp, addr).exceptionally(ex -> {
+            LOG.warn("Failed to send SRTCP receiver report: {}", ex.getMessage());
+            return null;
+        });
+        return true;
+    }
+
     // ========================================================================
     // Public API — Lifecycle
     // ========================================================================
@@ -570,8 +569,8 @@ public class RTCPeerConnection implements AutoCloseable {
 
         // Generate new credentials
         SecureRandom random = new SecureRandom();
-        this.localUfrag = generateCredential(random, 4);
-        this.localPwd = generateCredential(random, 22);
+        this.localUfrag = WebrtcSdpUtil.generateCredential(random, 4);
+        this.localPwd = WebrtcSdpUtil.generateCredential(random, 22);
 
         // Restart the ICE agent (clears state, returns to NEW)
         iceAgent.restartIce();
@@ -682,13 +681,6 @@ public class RTCPeerConnection implements AutoCloseable {
         if (handler != null) {
             handler.accept(new RTCIceCandidate(c.toSdpAttribute(), "0", 0));
         }
-    }
-
-    private static List<InetSocketAddress> getDefaultStunServers() {
-        List<InetSocketAddress> servers = new ArrayList<>();
-        servers.add(new InetSocketAddress("stun.l.google.com", 19302));
-        servers.add(new InetSocketAddress("stun.cloudflare.com", 3478));
-        return servers;
     }
 
     // ========================================================================
@@ -1026,18 +1018,13 @@ public class RTCPeerConnection implements AutoCloseable {
                 return;
             }
             noteInboundActivity();
-            if (isStunPacket(data)) {
+            if (WebrtcPacketUtil.isStunPacket(data)) {
                 handleStunPacket(data, remote);
-            } else if (isDtlsPacket(data)) {
-                if (firstDtlsPacketLogged.compareAndSet(false, true)) {
-                    LOG.info("First DTLS packet received from " + remote
-                        + " contentType=" + (data[0] & 0xFF)
-                        + " bytes=" + data.length);
-                }
-                dtlsReceiveQueue.offer(data);
-            } else if (isRtcpPacket(data)) {
+            } else if (WebrtcPacketUtil.isDtlsPacket(data)) {
+                handleDtlsPacket(data, remote);
+            } else if (WebrtcPacketUtil.isRtcpPacket(data)) {
                 handleRtcpPacket(data, remote);
-            } else if (isRtpPacket(data)) {
+            } else if (WebrtcPacketUtil.isRtpPacket(data)) {
                 handleRtpPacket(data, remote);
             }
         });
@@ -1047,17 +1034,19 @@ public class RTCPeerConnection implements AutoCloseable {
         lastInboundActivityAtMs = System.currentTimeMillis();
     }
 
-    private static boolean isDtlsPacket(byte[] data) {
-        return data.length > 0 && (data[0] & 0xFF) >= 20 && (data[0] & 0xFF) <= 63;
+    private void handleStunPacket(byte[] data, InetSocketAddress remote) {
+        try {
+            StunMessage msg = StunMessage.decode(data);
+            if (iceAgent != null) {
+                iceAgent.handleStunMessage(msg, remote);
+            }
+        } catch (Exception e) {
+            // ignore decode errors
+        }
     }
 
-    private static boolean isRtpPacket(byte[] data) {
-        // RTP version 2: first byte has bits 7-6 = 10 (0x80-0xBF)
-        return data.length >= 12 && (data[0] & 0xC0) == 0x80;
-    }
-
-    private static boolean isRtcpPacket(byte[] data) {
-        return data.length >= 8 && (data[0] & 0xC0) == 0x80 && (data[1] & 0xFF) >= 192 && (data[1] & 0xFF) <= 223;
+    private void handleDtlsPacket(byte[] data, InetSocketAddress remote) {
+        dtlsReceiveQueue.offer(data);
     }
 
     private void handleRtpPacket(byte[] data, InetSocketAddress remote) {
@@ -1091,10 +1080,22 @@ public class RTCPeerConnection implements AutoCloseable {
             if (parseResult == null || !parseResult.rtcp() || parseResult.rtcpPacket() == null) {
                 return;
             }
-            dispatchRtcpFeedback(parseResult.rtcpPacket());
+            dispatchInboundRtcpPacket(parseResult.rtcpPacket());
         } catch (SrtpException e) {
             LOG.debug("SRTCP unprotect failed from {}: {}", remote, e.getMessage());
         }
+    }
+
+    private void dispatchInboundRtcpPacket(RtcpPacket packet) {
+        Consumer<RtcpPacket> rtcpPacketHandler = onRtcpPacket;
+        if (rtcpPacketHandler != null) {
+            try {
+                rtcpPacketHandler.accept(packet);
+            } catch (RuntimeException e) {
+                LOG.warn("RTCP packet callback failed: {}", e.getMessage(), e);
+            }
+        }
+        dispatchRtcpFeedback(packet);
     }
 
     private SrtpCryptoContext resolveInboundSrtcpContext() {
@@ -1146,95 +1147,6 @@ public class RTCPeerConnection implements AutoCloseable {
         return null;
     }
 
-    private static boolean isStunPacket(byte[] data) {
-        // STUN magic cookie at bytes 4-7: 0x2112A442
-        return data.length >= 20
-            && data[4] == 0x21 && data[5] == 0x12
-            && data[6] == (byte) 0xA4 && data[7] == 0x42;
-    }
-
-    private void logDtlsClientHelloSummary(byte[] data) {
-        try {
-            if (data == null || data.length < 13) {
-                return;
-            }
-            int contentType = data[0] & 0xFF;
-            if (contentType != 22) { // handshake
-                return;
-            }
-            int recordLen = ((data[11] & 0xFF) << 8) | (data[12] & 0xFF);
-            if (13 + recordLen > data.length || recordLen < 12) {
-                return;
-            }
-            int hsType = data[13] & 0xFF;
-            if (hsType != 1) { // client_hello
-                return;
-            }
-            int hsFragLen = ((data[22] & 0xFF) << 16) | ((data[23] & 0xFF) << 8) | (data[24] & 0xFF);
-            int bodyStart = 25;
-            int bodyEnd = Math.min(bodyStart + hsFragLen, data.length);
-            if (bodyEnd - bodyStart < 2 + 32 + 1 + 2 + 1) {
-                return;
-            }
-            int p = bodyStart;
-            p += 2;  // client_version
-            p += 32; // random
-            int sidLen = data[p++] & 0xFF;
-            p += sidLen;
-            if (p + 2 > bodyEnd) return;
-            int csLen = ((data[p] & 0xFF) << 8) | (data[p + 1] & 0xFF);
-            p += 2;
-            if (p + csLen > bodyEnd) return;
-
-            boolean offerEcdsa128Gcm = false;
-            boolean offerEcdsa256Gcm = false;
-            boolean offerEcdsa128Cbc = false;
-            for (int i = 0; i + 1 < csLen; i += 2) {
-                int suite = ((data[p + i] & 0xFF) << 8) | (data[p + i + 1] & 0xFF);
-                if (suite == CipherSuite.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256) offerEcdsa128Gcm = true;
-                if (suite == CipherSuite.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384) offerEcdsa256Gcm = true;
-                if (suite == CipherSuite.TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA) offerEcdsa128Cbc = true;
-            }
-            p += csLen;
-            if (p + 1 > bodyEnd) return;
-            int compLen = data[p++] & 0xFF;
-            p += compLen;
-
-            boolean hasUseSrtp = false;
-            if (p + 2 <= bodyEnd) {
-                int extLen = ((data[p] & 0xFF) << 8) | (data[p + 1] & 0xFF);
-                p += 2;
-                int extEnd = Math.min(p + extLen, bodyEnd);
-                while (p + 4 <= extEnd) {
-                    int extType = ((data[p] & 0xFF) << 8) | (data[p + 1] & 0xFF);
-                    int len = ((data[p + 2] & 0xFF) << 8) | (data[p + 3] & 0xFF);
-                    p += 4;
-                    if (extType == 14) { // use_srtp
-                        hasUseSrtp = true;
-                        break;
-                    }
-                    p += len;
-                }
-            }
-
-            LOG.info("DTLS ClientHello offers ecdsa128gcm={} ecdsa256gcm={} ecdsa128cbc={} use_srtp={}",
-                offerEcdsa128Gcm, offerEcdsa256Gcm, offerEcdsa128Cbc, hasUseSrtp);
-        } catch (Exception ignore) {
-            // diagnostics only
-        }
-    }
-
-    private void handleStunPacket(byte[] data, InetSocketAddress remote) {
-        try {
-            StunMessage msg = StunMessage.decode(data);
-            if (iceAgent != null) {
-                iceAgent.handleStunMessage(msg, remote);
-            }
-        } catch (Exception e) {
-            // ignore decode errors
-        }
-    }
-
     // ========================================================================
     // Internal — SDP builder
     // ========================================================================
@@ -1243,9 +1155,16 @@ public class RTCPeerConnection implements AutoCloseable {
         if ("answer".equals(type) && remoteSdp != null) {
             return buildAnswerSdp(agent, remoteSdp);
         }
+        if ("offer".equals(type)) {
+            return buildOfferSdp(agent);
+        }
+        return null;
+    }
+
+    private String buildOfferSdp(IceAgent agent) {
         InetSocketAddress localAddr = transport.getLocalAddress();
         String host = localAddr.getAddress().isAnyLocalAddress()
-            ? "127.0.0.1" : localAddr.getHostString();
+                ? "127.0.0.1" : localAddr.getHostString();
         SdpBuilder builder = new SdpBuilder();
         builder.setOrigin("-", System.currentTimeMillis(), host);
 
@@ -1266,7 +1185,7 @@ public class RTCPeerConnection implements AutoCloseable {
         SdpBuilder.MediaBuilder appMedia = builder.addMedia("application", 9, "DTLS/SCTP", 5000);
         appMedia.addAttribute("mid", "0");
         appMedia.addAttribute("setup", "actpass");
-        addCandidateAttributes(appMedia, agent);
+        WebrtcSdpUtil.addCandidateAttributes(appMedia, agent);
         appMedia.addAttribute("sctp-port", String.valueOf(SctpConstants.DEFAULT_OS));
 
         // ===== Transceiver media sections =====
@@ -1275,12 +1194,12 @@ public class RTCPeerConnection implements AutoCloseable {
             String mediaType = trans.getKind() == MediaStreamTrack.Kind.AUDIO ? "audio" : "video";
             int pt = trans.getKind() == MediaStreamTrack.Kind.AUDIO ? 111 : 96;
             String codec = trans.getKind() == MediaStreamTrack.Kind.AUDIO
-                ? "111 opus/48000/2" : "96 H264/90000";
+                    ? "111 opus/48000/2" : "96 H264/90000";
             trans.setNegotiatedPayloadType(Integer.valueOf(pt));
             trans.setNegotiatedClockRate(Integer.valueOf(trans.getKind() == MediaStreamTrack.Kind.AUDIO ? 48000 : 90000));
 
             SdpBuilder.MediaBuilder media = builder.addMedia(mediaType, 9, "UDP/TLS/RTP/SAVPF",
-                trans.getKind() == MediaStreamTrack.Kind.AUDIO ? 111 : 96);
+                    trans.getKind() == MediaStreamTrack.Kind.AUDIO ? 111 : 96);
             media.addAttribute("mid", String.valueOf(i + 1));
             media.addAttribute("rtpmap", codec);
             media.addAttribute("rtcp-mux");
@@ -1305,9 +1224,8 @@ public class RTCPeerConnection implements AutoCloseable {
             }
 
             // ICE candidates for this media section
-            addCandidateAttributes(media, agent);
+            WebrtcSdpUtil.addCandidateAttributes(media, agent);
         }
-
         return builder.build();
     }
 
@@ -1318,7 +1236,7 @@ public class RTCPeerConnection implements AutoCloseable {
         SdpBuilder builder = new SdpBuilder();
         builder.setOrigin("-", System.currentTimeMillis(), host);
 
-        builder.addSessionAttribute("group", "BUNDLE " + answerBundleMids(offer));
+        builder.addSessionAttribute("group", "BUNDLE " + WebrtcAnswerSdpGenerator.answerBundleMids(offer));
         builder.addSessionAttribute("ice-ufrag", localUfrag);
         builder.addSessionAttribute("ice-pwd", localPwd);
         builder.addSessionAttribute("fingerprint", "sha-256 " + localFingerprint);
@@ -1326,339 +1244,15 @@ public class RTCPeerConnection implements AutoCloseable {
 
         for (MediaDescription offeredMedia : offer.getMediaDescriptions()) {
             if ("application".equals(offeredMedia.mediaType)) {
-                appendApplicationAnswer(builder, offeredMedia, agent);
+                WebrtcAnswerSdpGenerator.appendApplicationAnswer(builder, offeredMedia, agent);
                 continue;
             }
             if ("audio".equals(offeredMedia.mediaType) || "video".equals(offeredMedia.mediaType)) {
-                appendMediaAnswer(builder, offeredMedia, agent);
+                WebrtcAnswerSdpGenerator.appendMediaAnswer(transceivers, builder, offeredMedia, agent);
             }
         }
 
         return builder.build();
-    }
-
-    private String answerBundleMids(SdpDescription offer) {
-        StringBuilder mids = new StringBuilder();
-        for (MediaDescription media : offer.getMediaDescriptions()) {
-            String mid = media.getMid();
-            if (mid == null || mid.trim().isEmpty()) {
-                continue;
-            }
-            if (mids.length() > 0) {
-                mids.append(' ');
-            }
-            mids.append(mid);
-        }
-        return mids.length() == 0 ? "0" : mids.toString();
-    }
-
-    private void appendApplicationAnswer(SdpBuilder builder, MediaDescription offeredMedia, IceAgent agent) {
-        int[] payloadTypes = toPayloadTypeArray(offeredMedia.payloadTypes);
-        if (payloadTypes.length == 0) {
-            payloadTypes = new int[]{5000};
-        }
-        SdpBuilder.MediaBuilder appMedia = builder.addMedia(
-            offeredMedia.mediaType,
-            9,
-            offeredMedia.protocol,
-            payloadTypes);
-        appMedia.addAttribute("mid", safeMid(offeredMedia));
-        appMedia.addAttribute("setup", "passive");
-        addCandidateAttributes(appMedia, agent);
-        appMedia.addAttribute("sctp-port", String.valueOf(SctpConstants.DEFAULT_OS));
-    }
-
-    private void appendMediaAnswer(SdpBuilder builder, MediaDescription offeredMedia, IceAgent agent) {
-        RTCRtpTransceiver transceiver = findTransceiverByMid(offeredMedia.getMid());
-        if (transceiver == null) {
-            SdpBuilder.MediaBuilder rejected = builder.addMedia(
-                offeredMedia.mediaType,
-                0,
-                offeredMedia.protocol,
-                firstPayloadTypeOrDefault(offeredMedia));
-            rejected.addAttribute("mid", safeMid(offeredMedia));
-            return;
-        }
-
-        Integer payloadType = answerPayloadType(offeredMedia, transceiver.getKind());
-        if (payloadType == null) {
-            transceiver.setNegotiatedPayloadType(null);
-            transceiver.setNegotiatedClockRate(null);
-            transceiver.setNegotiatedCodecType(null);
-            transceiver.setDirection(RTCRtpTransceiver.Direction.INACTIVE);
-            SdpBuilder.MediaBuilder rejected = builder.addMedia(
-                offeredMedia.mediaType,
-                0,
-                offeredMedia.protocol,
-                firstPayloadTypeOrDefault(offeredMedia));
-            rejected.addAttribute("mid", safeMid(offeredMedia));
-            return;
-        }
-        String rtpMap = answerRtpMap(offeredMedia, payloadType, transceiver.getKind());
-        transceiver.setNegotiatedPayloadType(payloadType);
-        transceiver.setNegotiatedClockRate(Integer.valueOf(parseClockRateFromRtpMap(rtpMap, transceiver.getKind())));
-        transceiver.setNegotiatedCodecType(parseCodecTypeFromRtpMap(rtpMap, transceiver.getKind()));
-        SdpBuilder.MediaBuilder media = builder.addMedia(offeredMedia.mediaType, 9, offeredMedia.protocol, payloadType);
-        media.addAttribute("mid", safeMid(offeredMedia));
-        media.addAttribute("rtpmap", rtpMap);
-        copyCodecAttributes(offeredMedia, media, payloadType);
-        media.addAttribute("rtcp-mux");
-        media.addAttribute("setup", "passive");
-        addDirectionAttribute(media, transceiver.getDirection());
-
-        long ssrc = transceiver.getSender().getSsrc();
-        media.addAttribute("ssrc", ssrc + " cname:webrtc-java");
-
-        MediaStreamTrack track = transceiver.getSender().getTrack();
-        if (track != null) {
-            media.addAttribute("msid", safeMid(offeredMedia) + " " + track.getId());
-        }
-
-        addCandidateAttributes(media, agent);
-    }
-
-    private RTCRtpTransceiver findTransceiverByMid(String mid) {
-        if (mid == null) {
-            return null;
-        }
-        for (RTCRtpTransceiver transceiver : transceivers) {
-            if (transceiver != null && mid.equals(transceiver.getMid())) {
-                return transceiver;
-            }
-        }
-        return null;
-    }
-
-    private void addDirectionAttribute(SdpBuilder.MediaBuilder media, RTCRtpTransceiver.Direction direction) {
-        switch (direction) {
-            case SENDRECV: media.addAttribute("sendrecv"); break;
-            case SENDONLY: media.addAttribute("sendonly"); break;
-            case RECVONLY: media.addAttribute("recvonly"); break;
-            case INACTIVE: media.addAttribute("inactive"); break;
-            default: media.addAttribute("inactive"); break;
-        }
-    }
-
-    private Integer answerPayloadType(MediaDescription offeredMedia, MediaStreamTrack.Kind kind) {
-        if (kind == MediaStreamTrack.Kind.AUDIO) {
-            return findPayloadTypeByCodec(offeredMedia, "pcmu/");
-        }
-        Integer matched = findPayloadTypeByCodec(offeredMedia, "h264/");
-        if (matched != null) {
-            return matched;
-        }
-        return null;
-    }
-
-    private String answerRtpMap(MediaDescription offeredMedia, int payloadType, MediaStreamTrack.Kind kind) {
-        String offered = findRtpMapValue(offeredMedia, payloadType);
-        if (offered != null) {
-            return offered;
-        }
-        if (kind == MediaStreamTrack.Kind.AUDIO && payloadType == 0) {
-            return "0 PCMU/8000";
-        }
-        if (kind == MediaStreamTrack.Kind.AUDIO && payloadType == 8) {
-            return "8 PCMA/8000";
-        }
-        return kind == MediaStreamTrack.Kind.AUDIO
-            ? payloadType + " opus/48000/2"
-            : payloadType + " H264/90000";
-    }
-
-    private CodecType parseCodecTypeFromRtpMap(String rtpMap, MediaStreamTrack.Kind kind) {
-        if (rtpMap == null) {
-            return kind == MediaStreamTrack.Kind.VIDEO ? CodecType.H264 : CodecType.UNKNOWN;
-        }
-        String[] parts = rtpMap.trim().split("\\s+", 2);
-        if (parts.length < 2) {
-            return kind == MediaStreamTrack.Kind.VIDEO ? CodecType.H264 : CodecType.UNKNOWN;
-        }
-        String codec = parts[1].toLowerCase(Locale.ROOT);
-        if (codec.startsWith("h264/")) {
-            return CodecType.H264;
-        }
-        if (codec.startsWith("opus/")) {
-            return CodecType.OPUS;
-        }
-        if (codec.startsWith("pcmu/")) {
-            return CodecType.G711U;
-        }
-        if (codec.startsWith("pcma/")) {
-            return CodecType.G711A;
-        }
-        return CodecType.UNKNOWN;
-    }
-
-    private Integer findPayloadTypeByCodec(MediaDescription media, String codecPrefixLowerCase) {
-        for (SdpDescription.Attribute attr : media.attributes) {
-            if (!"rtpmap".equals(attr.key) || attr.value == null) {
-                continue;
-            }
-            String[] parts = attr.value.trim().split("\\s+", 2);
-            if (parts.length < 2 || !parts[1].toLowerCase(Locale.ROOT).startsWith(codecPrefixLowerCase)) {
-                continue;
-            }
-            try {
-                return Integer.valueOf(Integer.parseInt(parts[0]));
-            } catch (NumberFormatException e) {
-                return null;
-            }
-        }
-        return null;
-    }
-
-    private String findRtpMapValue(MediaDescription media, int payloadType) {
-        String prefix = String.valueOf(payloadType) + " ";
-        for (SdpDescription.Attribute attr : media.attributes) {
-            if ("rtpmap".equals(attr.key) && attr.value != null && attr.value.startsWith(prefix)) {
-                return attr.value;
-            }
-        }
-        return null;
-    }
-
-    private int firstPayloadTypeOrDefault(MediaDescription media) {
-        if (!media.payloadTypes.isEmpty()) {
-            return media.payloadTypes.get(0).intValue();
-        }
-        return "audio".equals(media.mediaType) ? 111 : 96;
-    }
-
-    private int[] toPayloadTypeArray(List<Integer> payloadTypes) {
-        int[] result = new int[payloadTypes == null ? 0 : payloadTypes.size()];
-        for (int i = 0; i < result.length; i++) {
-            result[i] = payloadTypes.get(i).intValue();
-        }
-        return result;
-    }
-
-    private String safeMid(MediaDescription media) {
-        String mid = media.getMid();
-        return mid == null || mid.trim().isEmpty() ? "0" : mid;
-    }
-
-    private void copyCodecAttributes(MediaDescription offeredMedia, SdpBuilder.MediaBuilder media, int payloadType) {
-        String ptPrefix = String.valueOf(payloadType) + " ";
-        for (SdpDescription.Attribute attr : offeredMedia.attributes) {
-            if (attr == null || attr.key == null || attr.value == null) {
-                continue;
-            }
-            if ("fmtp".equals(attr.key) && attr.value.startsWith(ptPrefix)) {
-                media.addAttribute("fmtp", attr.value);
-                continue;
-            }
-            if ("rtcp-fb".equals(attr.key)
-                && (attr.value.startsWith(ptPrefix) || attr.value.startsWith("* "))) {
-                media.addAttribute("rtcp-fb", attr.value);
-            }
-        }
-    }
-
-    private int parseClockRateFromRtpMap(String rtpMap, MediaStreamTrack.Kind kind) {
-        if (rtpMap == null) {
-            return kind == MediaStreamTrack.Kind.AUDIO ? 48000 : 90000;
-        }
-        String[] parts = rtpMap.trim().split("\\s+");
-        if (parts.length < 2) {
-            return kind == MediaStreamTrack.Kind.AUDIO ? 48000 : 90000;
-        }
-        String[] codecParts = parts[1].split("/");
-        if (codecParts.length < 2) {
-            return kind == MediaStreamTrack.Kind.AUDIO ? 48000 : 90000;
-        }
-        try {
-            return Integer.parseInt(codecParts[1]);
-        } catch (NumberFormatException e) {
-            return kind == MediaStreamTrack.Kind.AUDIO ? 48000 : 90000;
-        }
-    }
-
-    private void addCandidateAttributes(SdpBuilder.MediaBuilder media, IceAgent agent) {
-        for (IceCandidate c : agent.getLocalCandidates()) {
-            String relatedAddr = null;
-            int relatedPort = 0;
-            if (c.getRelatedAddress() != null) {
-                relatedAddr = c.getRelatedAddress().getHostString();
-                relatedPort = c.getRelatedAddress().getPort();
-            }
-            SdpBuilder.IceCandidateInfo ci = new SdpBuilder.IceCandidateInfo(
-                c.getFoundation(), c.getComponentId(), c.getTransport(),
-                c.getPriority(), c.getAddress().getHostString(),
-                c.getAddress().getPort(), IceCandidate.typeToString(c.getType()),
-                relatedAddr, relatedPort);
-            media.addCandidate(ci);
-        }
-    }
-
-    // ========================================================================
-    // Internal — Candidate parsing from SDP
-    // ========================================================================
-
-    /**
-     * Parse an SDP candidate attribute line into an IceCandidate.
-     * Input: "a=candidate:foundation componentId transport priority ip port typ type ..."
-     */
-    public static IceCandidate parseCandidate(String sdpAttr, String ufrag) {
-        try {
-            String val = sdpAttr;
-            if (val.startsWith("a=candidate:")) {
-                val = val.substring("a=candidate:".length());
-            } else if (val.startsWith("candidate:")) {
-                val = val.substring("candidate:".length());
-            }
-
-            String[] parts = val.split(" ");
-            if (parts.length < 8) return null;
-
-            String foundation = parts[0];
-            int componentId = Integer.parseInt(parts[1]);
-            String transportType = parts[2];
-            long priority = Long.parseLong(parts[3]);
-            String ip = parts[4];
-            int port = Integer.parseInt(parts[5]);
-
-            // parts[6] should be "typ"
-            CandidateType type = IceCandidate.stringToType(parts[7]);
-
-            return new IceCandidate(foundation, componentId, transportType,
-                new InetSocketAddress(ip, port), type, null);
-        } catch (Exception e) {
-            LOG.warn("Failed to parse ICE candidate: " + e.getMessage());
-            return null;
-        }
-    }
-
-    // ========================================================================
-    // Utility — random credential generation
-    // ========================================================================
-
-    private static final char[] CREDENTIAL_CHARS =
-        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".toCharArray();
-
-    static String generateCredential(SecureRandom random, int length) {
-        char[] chars = new char[length];
-        for (int i = 0; i < length; i++) {
-            chars[i] = CREDENTIAL_CHARS[random.nextInt(CREDENTIAL_CHARS.length)];
-        }
-        return new String(chars);
-    }
-
-    private static boolean hasSctpMedia(SdpDescription sdp) {
-        if (sdp == null) {
-            return false;
-        }
-        for (MediaDescription md : sdp.getMediaDescriptions()) {
-            if (md == null || md.mediaType == null || md.protocol == null) {
-                continue;
-            }
-            if ("application".equals(md.mediaType)
-                && md.port > 0
-                && md.protocol.toUpperCase(Locale.ROOT).contains("SCTP")) {
-                return true;
-            }
-        }
-        return false;
     }
 
     private boolean expectsSctp() {
@@ -1667,14 +1261,14 @@ public class RTCPeerConnection implements AutoCloseable {
 
     private boolean resolveDtlsServerRole() {
         boolean fallback = iceAgent != null && iceAgent.getRole() == IceAgent.Role.CONTROLLED;
-        String localSetup = extractSetupAttribute(localDescription != null ? localDescription.getSdp() : null);
+        String localSetup = WebrtcSdpUtil.extractSetupAttribute(localDescription != null ? localDescription.getSdp() : null);
         if ("passive".equalsIgnoreCase(localSetup)) {
             return true;
         }
         if ("active".equalsIgnoreCase(localSetup)) {
             return false;
         }
-        String remoteSetup = extractSetupAttribute(remoteSdp);
+        String remoteSetup = WebrtcSdpUtil.extractSetupAttribute(remoteSdp);
         if ("active".equalsIgnoreCase(remoteSetup)) {
             return true;
         }
@@ -1684,37 +1278,4 @@ public class RTCPeerConnection implements AutoCloseable {
         return fallback;
     }
 
-    private String extractSetupAttribute(String sdpText) {
-        if (sdpText == null || sdpText.trim().isEmpty()) {
-            return null;
-        }
-        try {
-            return extractSetupAttribute(SdpParser.parse(sdpText));
-        } catch (Exception e) {
-            LOG.debug("Failed to parse local SDP for setup attribute: {}", e.getMessage());
-            return null;
-        }
-    }
-
-    private String extractSetupAttribute(SdpDescription sdp) {
-        if (sdp == null) {
-            return null;
-        }
-        for (MediaDescription md : sdp.getMediaDescriptions()) {
-            if (md == null || md.attributes == null) {
-                continue;
-            }
-            for (SdpDescription.Attribute attr : md.attributes) {
-                if ("setup".equals(attr.key) && attr.value != null) {
-                    return attr.value.trim();
-                }
-            }
-        }
-        for (SdpDescription.Attribute attr : sdp.getSessionAttributes()) {
-            if ("setup".equals(attr.key) && attr.value != null) {
-                return attr.value.trim();
-            }
-        }
-        return null;
-    }
 }

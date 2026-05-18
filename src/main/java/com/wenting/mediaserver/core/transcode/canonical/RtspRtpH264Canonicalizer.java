@@ -39,7 +39,7 @@ public final class RtspRtpH264Canonicalizer implements VideoFrameCanonicalizer {
             return Collections.emptyList();
         }
         InboundMediaFrame frame = packet.frame();
-        if (frame.sourceProtocol() != StreamProtocol.RTSP
+        if ((frame.sourceProtocol() != StreamProtocol.RTSP && frame.sourceProtocol() != StreamProtocol.WEBRTC)
                 || frame.trackType() != TrackType.VIDEO
                 || frame.codecType() != CodecType.H264) {
             return Collections.emptyList();
@@ -118,7 +118,7 @@ public final class RtspRtpH264Canonicalizer implements VideoFrameCanonicalizer {
         Long timestampMillis = toTimestampMillis(state, packet.clockRate(), rtpTimestamp);
         if (state.currentAccessUnitKeyFrame && configPayload != null && state.shouldSendConfigBeforeKeyFrame()) {
             InboundMediaFrame configFrame = new InboundMediaFrame(
-                    StreamProtocol.RTSP,
+                    packet.frame().sourceProtocol(),
                     TrackType.VIDEO,
                     CodecType.H264,
                     packet.frame().sessionId(),
@@ -143,7 +143,7 @@ public final class RtspRtpH264Canonicalizer implements VideoFrameCanonicalizer {
         }
         byte[] accessUnitPayload = buildLengthPrefixedPayload(state.currentAccessUnitNals);
         InboundMediaFrame mediaFrame = new InboundMediaFrame(
-                StreamProtocol.RTSP,
+                packet.frame().sourceProtocol(),
                 TrackType.VIDEO,
                 CodecType.H264,
                 packet.frame().sessionId(),

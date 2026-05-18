@@ -19,17 +19,27 @@ public final class WebRtcUdpBootstrap implements IServerBootstrap, DatagramIoSen
 
     private final MediaServerConfig config;
     private final WebRtcSessionManager sessionManager;
+    private final WebRtcPublishSessionManager publishSessionManager;
     private final UdpTransport transport;
 
     public WebRtcUdpBootstrap(MediaServerConfig config, WebRtcSessionManager sessionManager) {
+        this(config, sessionManager, null);
+    }
+
+    public WebRtcUdpBootstrap(
+            MediaServerConfig config,
+            WebRtcSessionManager sessionManager,
+            WebRtcPublishSessionManager publishSessionManager
+    ) {
         this.config = config;
         this.sessionManager = sessionManager;
+        this.publishSessionManager = publishSessionManager;
         this.transport = new UdpTransport(config == null ? 0 : config.webrtcUdpPort());
     }
 
     @Override
     public void start() throws InterruptedException {
-        transport.setPacketHandler(new WebRtcUdpPacketHandler(sessionManager));
+        transport.setPacketHandler(new WebRtcUdpPacketHandler(sessionManager, publishSessionManager));
         transport.start();
         log.info("WebRTC UDP listening on {}", transport.getLocalAddress());
     }

@@ -9,6 +9,7 @@ import com.wenting.mediaserver.protocol.rtmp.RtmpBootstrap;
 import com.wenting.mediaserver.protocol.rtmp.RtmpSessionManager;
 import com.wenting.mediaserver.protocol.rtsp.RtspBootstrap;
 import com.wenting.mediaserver.protocol.rtsp.RtspSessionManager;
+import com.wenting.mediaserver.protocol.webrtc.WebRtcPublishSessionManager;
 import com.wenting.mediaserver.protocol.webrtc.WebRtcSessionManager;
 import com.wenting.mediaserver.protocol.webrtc.WebRtcUdpBootstrap;
 import org.slf4j.Logger;
@@ -31,23 +32,26 @@ public final class MediaServerBootstrap implements AutoCloseable {
     private final RtmpSessionManager rtmpSessionManager;
     private final RtspSessionManager sessionManager;
     private final WebRtcSessionManager webRtcSessionManager;
+    private final WebRtcPublishSessionManager webRtcPublishSessionManager;
 
     public MediaServerBootstrap(MediaServerConfig config) {
         this.config = config;
         this.rtmpSessionManager = new RtmpSessionManager();
         this.sessionManager = new RtspSessionManager();
         this.webRtcSessionManager = new WebRtcSessionManager();
+        this.webRtcPublishSessionManager = new WebRtcPublishSessionManager();
         this.registry = new StreamRegistry(sessionManager, rtmpSessionManager);
         this.streamTransformOrchestrator = new WebRtcPlaybackStreamTransformOrchestrator(
                 registry,
                 registry.webRtcPlaybackSuffix()
         );
         this.registry.setStreamTransformOrchestrator(streamTransformOrchestrator);
-        this.webRtcUdpBootstrap = new WebRtcUdpBootstrap(config, webRtcSessionManager);
+        this.webRtcUdpBootstrap = new WebRtcUdpBootstrap(config, webRtcSessionManager, webRtcPublishSessionManager);
         this.httpBootstrap = new HttpBootstrap(
                 config,
                 registry,
                 webRtcSessionManager,
+                webRtcPublishSessionManager,
                 webRtcUdpBootstrap,
                 webRtcUdpBootstrap.localAddress()
         );

@@ -2,8 +2,10 @@ package com.wenting.mediaserver.protocol.http;
 
 import com.wenting.mediaserver.protocol.http.api.HttpJsonApiHandler;
 import com.wenting.mediaserver.protocol.http.webrtc.WebRtcPlayHandler;
+import com.wenting.mediaserver.protocol.http.webrtc.WebRtcPublishHandler;
 import com.wenting.mediaserver.protocol.http.webrtc.WebRtcStopHandler;
 import com.wenting.mediaserver.protocol.http.webrtc.WebRtcTestPageHandler;
+import com.wenting.mediaserver.protocol.http.webrtc.WebRtcUnpublishHandler;
 import com.wenting.mediaserver.bootstrap.IServerBootstrap;
 import com.wenting.mediaserver.config.MediaServerConfig;
 import com.wenting.mediaserver.core.registry.StreamRegistry;
@@ -11,6 +13,7 @@ import com.wenting.mediaserver.protocol.http.flv.HttpFlvHandler;
 import com.wenting.mediaserver.protocol.http.hls.HlsHandler;
 import com.wenting.mediaserver.protocol.http.hls.HlsSessionManager;
 import com.wenting.mediaserver.protocol.webrtc.WebRtcSessionManager;
+import com.wenting.mediaserver.protocol.webrtc.WebRtcPublishSessionManager;
 import com.wenting.mediaserver.protocol.webrtc.transport.DatagramIoSender;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
@@ -40,13 +43,16 @@ public class HttpBootstrap implements IServerBootstrap {
     private final StreamRegistry registry;
     private final HlsSessionManager hlsSessionManager;
     private final WebRtcSessionManager webRtcSessionManager;
+    private final WebRtcPublishSessionManager webRtcPublishSessionManager;
     private final WebRtcPlayHandler webRtcPlayHandler;
+    private final WebRtcPublishHandler webRtcPublishHandler;
     private Channel httpChannel;
 
     public HttpBootstrap(
             MediaServerConfig config,
             StreamRegistry registry,
             WebRtcSessionManager webRtcSessionManager,
+            WebRtcPublishSessionManager webRtcPublishSessionManager,
             DatagramIoSender datagramIoSender,
             InetSocketAddress webRtcLocalAddress
     ) {
@@ -56,9 +62,21 @@ public class HttpBootstrap implements IServerBootstrap {
                 ? new HlsSessionManager(registry, Paths.get(config.hlsDirectory()))
                 : new HlsSessionManager(registry);
         this.webRtcSessionManager = webRtcSessionManager == null ? new WebRtcSessionManager() : webRtcSessionManager;
+        this.webRtcPublishSessionManager = webRtcPublishSessionManager == null ? new WebRtcPublishSessionManager() : webRtcPublishSessionManager;
         this.webRtcPlayHandler = new WebRtcPlayHandler(
                 registry,
                 this.webRtcSessionManager,
+                webRtcLocalAddress == null ? new InetSocketAddress(config.webrtcPublicIp(), config.webrtcUdpPort()) : webRtcLocalAddress,
+                datagramIoSender == null ? new DatagramIoSender() {
+                    @Override
+                    public CompletableFuture<Void> send(byte[] data, InetSocketAddress target) {
+                        return CompletableFuture.completedFuture(null);
+                    }
+                } : datagramIoSender
+        );
+        this.webRtcPublishHandler = new WebRtcPublishHandler(
+                registry,
+                this.webRtcPublishSessionManager,
                 webRtcLocalAddress == null ? new InetSocketAddress(config.webrtcPublicIp(), config.webrtcUdpPort()) : webRtcLocalAddress,
                 datagramIoSender == null ? new DatagramIoSender() {
                     @Override
@@ -82,7 +100,9 @@ public class HttpBootstrap implements IServerBootstrap {
                         ch.pipeline().addLast(new HttpObjectAggregator(65536));
                         ch.pipeline().addLast(new ChunkedWriteHandler());
                         ch.pipeline().addLast(new HttpRouterHandler(
+                                webRtcPublishHandler,
                                 webRtcPlayHandler,
+                                new WebRtcUnpublishHandler(HttpBootstrap.this.webRtcPublishSessionManager),
                                 new WebRtcStopHandler(HttpBootstrap.this.webRtcSessionManager),
                                 new WebRtcTestPageHandler(),
                                 new HlsHandler(registry, hlsSessionManager),
@@ -110,6 +130,7 @@ public class HttpBootstrap implements IServerBootstrap {
         }
         this.hlsSessionManager.close();
         this.webRtcSessionManager.close();
+        this.webRtcPublishSessionManager.close();
         this.worker.shutdownGracefully();
         this.boss.shutdownGracefully();
     }

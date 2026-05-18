@@ -1,120 +1,447 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>WebRTC Test</title>
+  <title>WebRTC Test Console</title>
   <style>
-    :root { color-scheme: light; }
-    body { margin: 0; font-family: Consolas, "Courier New", monospace; background: #0f172a; color: #e2e8f0; }
-    .wrap { max-width: 1100px; margin: 0 auto; padding: 24px; }
-    .panel { background: #111827; border: 1px solid #334155; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
-    h1 { margin: 0 0 12px; font-size: 24px; }
-    .controls { display: grid; grid-template-columns: 120px 1fr 120px 1fr auto auto; gap: 12px; align-items: center; }
-    label { color: #94a3b8; font-size: 13px; }
-    input { width: 100%; box-sizing: border-box; background: #020617; border: 1px solid #475569; color: #e2e8f0; border-radius: 8px; padding: 10px 12px; }
-    button { border: 0; border-radius: 8px; padding: 10px 14px; font-weight: 600; cursor: pointer; }
-    button.primary { background: #22c55e; color: #052e16; }
-    button.secondary { background: #475569; color: #f8fafc; }
-    video { width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: 12px; border: 1px solid #334155; }
-    pre { margin: 0; white-space: pre-wrap; word-break: break-word; color: #cbd5e1; min-height: 160px; }
-    .hint { color: #94a3b8; font-size: 13px; margin-top: 8px; }
+    :root {
+      color-scheme: light;
+      --bg: #0b1220;
+      --panel: #111827;
+      --line: #334155;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --accent: #22c55e;
+      --accent-2: #38bdf8;
+      --danger: #ef4444;
+    }
+
+    body {
+      margin: 0;
+      font-family: Consolas, "Courier New", monospace;
+      background: radial-gradient(circle at top, #172554 0%, var(--bg) 55%);
+      color: var(--text);
+    }
+
+    .wrap {
+      max-width: 1240px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+
+    .hero {
+      margin-bottom: 16px;
+      padding: 20px 24px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: linear-gradient(135deg, rgba(56, 189, 248, 0.14), rgba(34, 197, 94, 0.12));
+    }
+
+    .hero h1 {
+      margin: 0 0 8px;
+      font-size: 28px;
+    }
+
+    .hero p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+    }
+
+    .panel {
+      background: rgba(15, 23, 42, 0.92);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 18px;
+      box-sizing: border-box;
+    }
+
+    .panel h2 {
+      margin: 0 0 8px;
+      font-size: 20px;
+    }
+
+    .panel p {
+      margin: 0 0 16px;
+      color: var(--muted);
+      line-height: 1.5;
+      font-size: 13px;
+    }
+
+    .controls {
+      display: grid;
+      grid-template-columns: 92px 1fr 92px 1fr;
+      gap: 10px 12px;
+      align-items: center;
+      margin-bottom: 14px;
+    }
+
+    .controls label {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .controls input {
+      width: 100%;
+      box-sizing: border-box;
+      background: #020617;
+      border: 1px solid #475569;
+      color: var(--text);
+      border-radius: 10px;
+      padding: 10px 12px;
+    }
+
+    .actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 14px;
+    }
+
+    button {
+      border: 0;
+      border-radius: 999px;
+      padding: 10px 16px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    button.primary {
+      background: var(--accent);
+      color: #052e16;
+    }
+
+    button.secondary {
+      background: #475569;
+      color: #f8fafc;
+    }
+
+    button.publish {
+      background: var(--accent-2);
+      color: #082f49;
+    }
+
+    button.danger {
+      background: rgba(239, 68, 68, 0.16);
+      color: #fecaca;
+      border: 1px solid rgba(239, 68, 68, 0.28);
+    }
+
+    .video-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .video-card {
+      background: rgba(2, 6, 23, 0.7);
+      border: 1px solid rgba(71, 85, 105, 0.75);
+      border-radius: 14px;
+      overflow: hidden;
+    }
+
+    .video-card strong {
+      display: block;
+      padding: 10px 12px 0;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    video {
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      display: block;
+      background: #000;
+      margin-top: 8px;
+    }
+
+    .log-panel {
+      margin-top: 16px;
+    }
+
+    pre {
+      margin: 0;
+      min-height: 220px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      color: #cbd5e1;
+      line-height: 1.45;
+    }
+
+    code {
+      color: #bae6fd;
+    }
+
+    @media (max-width: 960px) {
+      .grid,
+      .video-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .controls {
+        grid-template-columns: 1fr;
+      }
+    }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <div class="panel">
-      <h1>WebRTC 拉流测试</h1>
-      <div class="controls">
-        <label for="app">app</label>
-        <input id="app" value="live" />
-        <label for="stream">stream</label>
-        <input id="stream" value="123456" />
-        <button id="start" class="primary">开始</button>
-        <button id="stop" class="secondary">停止</button>
+    <div class="hero">
+      <h1>WebRTC Test Console</h1>
+      <p>
+        One page for both playback and browser publish. Playback calls <code>/webrtc/play</code> and
+        <code>/webrtc/stop</code>. Publish calls <code>/webrtc/publish</code> and <code>/webrtc/unpublish</code>.
+        The current server publish MVP only supports H264 video.
+      </p>
+    </div>
+
+    <div class="grid">
+      <div class="panel">
+        <h2>Playback</h2>
+        <p>Pull an existing stream through WebRTC. The stream must already exist on the server.</p>
+        <div class="controls">
+          <label for="play-app">app</label>
+          <input id="play-app" value="live" />
+          <label for="play-stream">stream</label>
+          <input id="play-stream" value="123456" />
+        </div>
+        <div class="actions">
+          <button id="play-start" class="primary">Start Play</button>
+          <button id="play-stop" class="secondary">Stop Play</button>
+        </div>
+        <div class="video-card">
+          <strong>Remote Playback</strong>
+          <video id="play-video" autoplay playsinline controls></video>
+        </div>
       </div>
-      <div class="hint">测试页会向 <code>/webrtc/play</code> 发送 offer，请先确保对应流已存在。</div>
+
+      <div class="panel">
+        <h2>Publish</h2>
+        <p>
+          Capture local camera video and push it into <code>/webrtc/publish</code>. This page will
+          prefer H264 during codec negotiation. Audio is intentionally not sent.
+        </p>
+        <div class="controls">
+          <label for="publish-app">app</label>
+          <input id="publish-app" value="live" />
+          <label for="publish-stream">stream</label>
+          <input id="publish-stream" value="123456" />
+        </div>
+        <div class="actions">
+          <button id="publish-start" class="publish">Start Publish</button>
+          <button id="publish-stop" class="danger">Stop Publish</button>
+        </div>
+        <div class="video-grid">
+          <div class="video-card">
+            <strong>Local Preview</strong>
+            <video id="publish-video" autoplay playsinline muted></video>
+          </div>
+          <div class="video-card">
+            <strong>Notes</strong>
+            <div style="padding: 12px; color: var(--muted); line-height: 1.55; font-size: 13px;">
+              <div>1. Browser must support H264 send for this page to work.</div>
+              <div>2. Current server-side WebRTC publish path is video-only.</div>
+              <div>3. After publish succeeds, you can pull the same stream from the Playback panel.</div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
-    <div class="panel">
-      <video id="video" autoplay playsinline controls></video>
-    </div>
-    <div class="panel">
+
+    <div class="panel log-panel">
+      <h2>Log</h2>
       <pre id="log"></pre>
     </div>
   </div>
+
   <script>
-    let pc = null;
-    let currentSessionId = null;
-    const video = document.getElementById("video");
+    let playPc = null;
+    let playSessionId = null;
+    let publishPc = null;
+    let publishSessionId = null;
+    let publishStream = null;
+
+    const playVideo = document.getElementById("play-video");
+    const publishVideo = document.getElementById("publish-video");
     const logBox = document.getElementById("log");
+
     const log = (...args) => {
-      const line = args.map(v => typeof v === "string" ? v : JSON.stringify(v, null, 2)).join(" ");
+      const line = args.map(value => typeof value === "string" ? value : JSON.stringify(value, null, 2)).join(" ");
       logBox.textContent += line + "\n";
       logBox.scrollTop = logBox.scrollHeight;
       console.log(...args);
     };
-    const stop = async () => {
-      const sessionId = currentSessionId;
-      currentSessionId = null;
-      if (pc) {
-        pc.getSenders().forEach(sender => sender.track && sender.track.stop && sender.track.stop());
-        pc.close();
-        pc = null;
-      }
-      video.srcObject = null;
-      if (sessionId) {
-        try {
-          const response = await fetch("/webrtc/stop", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ sessionId })
-          });
-          const json = await response.json();
-          log("stop response", json);
-        } catch (error) {
-          log("stop request failed", error && error.message ? error.message : String(error));
-        }
-      }
-      log("peer connection stopped");
-    };
-    document.getElementById("stop").addEventListener("click", () => { stop(); });
-    document.getElementById("start").addEventListener("click", async () => {
-      await stop();
-      const app = document.getElementById("app").value.trim();
-      const stream = document.getElementById("stream").value.trim();
-      log("starting webrtc play", { app, stream });
-      pc = new RTCPeerConnection({ iceServers: [] });
-      pc.addTransceiver("audio", { direction: "recvonly" });
-      pc.addTransceiver("video", { direction: "recvonly" });
-      pc.ontrack = (event) => {
-        log("ontrack", { kind: event.track && event.track.kind });
-        video.srcObject = event.streams && event.streams[0] ? event.streams[0] : new MediaStream([event.track]);
-      };
-      pc.oniceconnectionstatechange = () => log("iceConnectionState", pc.iceConnectionState);
-      pc.onconnectionstatechange = () => log("connectionState", pc.connectionState);
-      pc.onicecandidate = (event) => {
-        if (event.candidate) {
-          log("local candidate", event.candidate.candidate);
-        } else {
-          log("local candidate gathering complete");
-        }
-      };
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      log("local offer created");
-      const response = await fetch("/webrtc/play", {
+
+    const postJson = async (url, body) => {
+      const response = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ app, stream, sdp: offer.sdp })
+        body: JSON.stringify(body)
       });
       const json = await response.json();
+      return { response, json };
+    };
+
+    const preferH264 = (transceiver) => {
+      if (!transceiver || typeof transceiver.setCodecPreferences !== "function" || !window.RTCRtpSender || !RTCRtpSender.getCapabilities) {
+        return;
+      }
+      const capabilities = RTCRtpSender.getCapabilities("video");
+      const codecs = capabilities && Array.isArray(capabilities.codecs) ? capabilities.codecs : [];
+      const h264 = codecs.filter(codec => codec && codec.mimeType === "video/H264");
+      const rest = codecs.filter(codec => codec && codec.mimeType !== "video/H264");
+      if (h264.length > 0) {
+        transceiver.setCodecPreferences([...h264, ...rest]);
+        log("publish codec preference set", h264.map(codec => codec.sdpFmtpLine || codec.mimeType));
+      } else {
+        log("publish codec preference warning", "browser does not expose H264 send capability");
+      }
+    };
+
+    const stopPlay = async () => {
+      const sessionId = playSessionId;
+      playSessionId = null;
+      if (playPc) {
+        playPc.close();
+        playPc = null;
+      }
+      playVideo.srcObject = null;
+      if (sessionId) {
+        try {
+          const { json } = await postJson("/webrtc/stop", { sessionId });
+          log("stop play response", json);
+        } catch (error) {
+          log("stop play request failed", error && error.message ? error.message : String(error));
+        }
+      }
+      log("play peer connection stopped");
+    };
+
+    const stopPublish = async () => {
+      const sessionId = publishSessionId;
+      publishSessionId = null;
+      if (publishPc) {
+        publishPc.getSenders().forEach(sender => {
+          if (sender && sender.track && typeof sender.track.stop === "function") {
+            sender.track.stop();
+          }
+        });
+        publishPc.close();
+        publishPc = null;
+      }
+      if (publishStream) {
+        publishStream.getTracks().forEach(track => track.stop());
+        publishStream = null;
+      }
+      publishVideo.srcObject = null;
+      if (sessionId) {
+        try {
+          const { json } = await postJson("/webrtc/unpublish", { sessionId });
+          log("stop publish response", json);
+        } catch (error) {
+          log("stop publish request failed", error && error.message ? error.message : String(error));
+        }
+      }
+      log("publish peer connection stopped");
+    };
+
+    document.getElementById("play-stop").addEventListener("click", () => {
+      stopPlay().catch(error => log("play stop error", error && error.message ? error.message : String(error)));
+    });
+
+    document.getElementById("publish-stop").addEventListener("click", () => {
+      stopPublish().catch(error => log("publish stop error", error && error.message ? error.message : String(error)));
+    });
+
+    document.getElementById("play-start").addEventListener("click", async () => {
+      await stopPlay();
+      const app = document.getElementById("play-app").value.trim();
+      const stream = document.getElementById("play-stream").value.trim();
+      log("starting webrtc play", { app, stream });
+
+      playPc = new RTCPeerConnection({ iceServers: [] });
+      playPc.addTransceiver("audio", { direction: "recvonly" });
+      playPc.addTransceiver("video", { direction: "recvonly" });
+      playPc.ontrack = (event) => {
+        log("play ontrack", { kind: event.track && event.track.kind });
+        playVideo.srcObject = event.streams && event.streams[0] ? event.streams[0] : new MediaStream([event.track]);
+      };
+      playPc.oniceconnectionstatechange = () => log("play iceConnectionState", playPc.iceConnectionState);
+      playPc.onconnectionstatechange = () => log("play connectionState", playPc.connectionState);
+      playPc.onicecandidate = (event) => {
+        if (event.candidate) {
+          log("play local candidate", event.candidate.candidate);
+        } else {
+          log("play candidate gathering complete");
+        }
+      };
+
+      const offer = await playPc.createOffer();
+      await playPc.setLocalDescription(offer);
+      log("play local offer created");
+
+      const { response, json } = await postJson("/webrtc/play", { app, stream, sdp: offer.sdp });
       log("play response", json);
       if (!response.ok || !json || json.code !== 0 || !json.data || !json.data.sdp || !json.data.sessionId) {
         throw new Error("play request failed");
       }
-      currentSessionId = json.data.sessionId;
-      await pc.setRemoteDescription({ type: "answer", sdp: json.data.sdp });
-      log("remote answer set");
+
+      playSessionId = json.data.sessionId;
+      await playPc.setRemoteDescription({ type: "answer", sdp: json.data.sdp });
+      log("play remote answer set");
+    });
+
+    document.getElementById("publish-start").addEventListener("click", async () => {
+      await stopPublish();
+      const app = document.getElementById("publish-app").value.trim();
+      const stream = document.getElementById("publish-stream").value.trim();
+      log("starting webrtc publish", { app, stream });
+
+      publishStream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          frameRate: { ideal: 25, max: 30 }
+        },
+        audio: false
+      });
+      publishVideo.srcObject = publishStream;
+
+      publishPc = new RTCPeerConnection({ iceServers: [] });
+      const videoTrack = publishStream.getVideoTracks()[0];
+      const transceiver = publishPc.addTransceiver(videoTrack, { direction: "sendonly", streams: [publishStream] });
+      preferH264(transceiver);
+
+      publishPc.oniceconnectionstatechange = () => log("publish iceConnectionState", publishPc.iceConnectionState);
+      publishPc.onconnectionstatechange = () => log("publish connectionState", publishPc.connectionState);
+      publishPc.onicecandidate = (event) => {
+        if (event.candidate) {
+          log("publish local candidate", event.candidate.candidate);
+        } else {
+          log("publish candidate gathering complete");
+        }
+      };
+
+      const offer = await publishPc.createOffer();
+      await publishPc.setLocalDescription(offer);
+      log("publish local offer created");
+
+      const { response, json } = await postJson("/webrtc/publish", { app, stream, sdp: offer.sdp });
+      log("publish response", json);
+      if (!response.ok || !json || json.code !== 0 || !json.data || !json.data.sdp || !json.data.sessionId) {
+        throw new Error("publish request failed");
+      }
+
+      publishSessionId = json.data.sessionId;
+      await publishPc.setRemoteDescription({ type: "answer", sdp: json.data.sdp });
+      log("publish remote answer set");
     });
   </script>
 </body>

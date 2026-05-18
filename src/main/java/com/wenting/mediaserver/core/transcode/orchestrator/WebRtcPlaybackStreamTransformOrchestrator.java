@@ -281,7 +281,7 @@ public final class WebRtcPlaybackStreamTransformOrchestrator implements StreamTr
         if (protocol == StreamProtocol.RTMP) {
             return new RtmpAvccH264Canonicalizer();
         }
-        if (protocol == StreamProtocol.RTSP) {
+        if (protocol == StreamProtocol.RTSP || protocol == StreamProtocol.WEBRTC) {
             return new RtspRtpH264Canonicalizer();
         }
         log.debug("No video frame canonicalizer registered yet for protocol={} source={}", protocol, sourceKey);

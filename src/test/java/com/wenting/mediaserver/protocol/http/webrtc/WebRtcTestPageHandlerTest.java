@@ -25,8 +25,12 @@ class WebRtcTestPageHandlerTest {
         String body = response.content().toString(CharsetUtil.UTF_8);
         assertTrue(body.contains("/webrtc/play"));
         assertTrue(body.contains("/webrtc/stop"));
+        assertTrue(body.contains("/webrtc/publish"));
+        assertTrue(body.contains("/webrtc/unpublish"));
         assertTrue(body.contains("sessionId"));
         assertTrue(body.contains("RTCPeerConnection"));
+        assertTrue(body.contains("preferH264"));
+        assertTrue(body.contains("getUserMedia"));
         response.release();
         channel.finishAndReleaseAll();
     }

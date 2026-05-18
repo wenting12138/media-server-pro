@@ -57,13 +57,15 @@ class HttpRouterHandlerTest {
     @Test
     void shouldDispatchToExactWebRtcPlayRoute() {
         RecordingHandler testPage = new RecordingHandler("/webrtc/test");
+        RecordingHandler publish = new RecordingHandler("/webrtc/publish");
         RecordingHandler play = new RecordingHandler("/webrtc/play");
         RecordingHandler stop = new RecordingHandler("/webrtc/stop");
-        EmbeddedChannel channel = new EmbeddedChannel(new HttpRouterHandler(testPage, play, stop));
+        EmbeddedChannel channel = new EmbeddedChannel(new HttpRouterHandler(testPage, publish, play, stop));
 
         channel.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.POST, "/webrtc/play"));
 
         assertEquals(0, testPage.callCount);
+        assertEquals(0, publish.callCount);
         assertEquals(1, play.callCount);
         assertEquals(0, stop.callCount);
         channel.finishAndReleaseAll();
@@ -81,6 +83,36 @@ class HttpRouterHandlerTest {
         assertEquals(0, testPage.callCount);
         assertEquals(0, play.callCount);
         assertEquals(1, stop.callCount);
+        channel.finishAndReleaseAll();
+    }
+
+    @Test
+    void shouldDispatchToExactWebRtcPublishRoute() {
+        RecordingHandler publish = new RecordingHandler("/webrtc/publish");
+        RecordingHandler play = new RecordingHandler("/webrtc/play");
+        RecordingHandler unpublish = new RecordingHandler("/webrtc/unpublish");
+        EmbeddedChannel channel = new EmbeddedChannel(new HttpRouterHandler(publish, play, unpublish));
+
+        channel.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.POST, "/webrtc/publish"));
+
+        assertEquals(1, publish.callCount);
+        assertEquals(0, play.callCount);
+        assertEquals(0, unpublish.callCount);
+        channel.finishAndReleaseAll();
+    }
+
+    @Test
+    void shouldDispatchToExactWebRtcUnpublishRoute() {
+        RecordingHandler publish = new RecordingHandler("/webrtc/publish");
+        RecordingHandler stop = new RecordingHandler("/webrtc/stop");
+        RecordingHandler unpublish = new RecordingHandler("/webrtc/unpublish");
+        EmbeddedChannel channel = new EmbeddedChannel(new HttpRouterHandler(publish, stop, unpublish));
+
+        channel.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.POST, "/webrtc/unpublish"));
+
+        assertEquals(0, publish.callCount);
+        assertEquals(0, stop.callCount);
+        assertEquals(1, unpublish.callCount);
         channel.finishAndReleaseAll();
     }
 
