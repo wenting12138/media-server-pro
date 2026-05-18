@@ -10,8 +10,11 @@ import com.wenting.mediaserver.core.publish.InboundRtpPacket;
 import com.wenting.mediaserver.core.publish.IPublishedStream;
 import com.wenting.mediaserver.core.enums.publish.MediaPacketTransport;
 import com.wenting.mediaserver.core.registry.StreamRegistry;
+import com.wenting.mediaserver.core.transcode.orchestrator.StreamTransformOrchestrator;
+import com.wenting.mediaserver.core.transcode.orchestrator.WebRtcPlaybackStreamTransformOrchestrator;
 import com.wenting.mediaserver.core.codec.rtmp.RtmpAudioMessage;
 import com.wenting.mediaserver.core.codec.rtmp.RtmpCommandMessage;
+import com.wenting.mediaserver.core.codec.rtmp.RtmpDataMessage;
 import com.wenting.mediaserver.core.codec.rtmp.RtmpVideoMessage;
 import com.wenting.mediaserver.protocol.rtsp.RtspSession;
 import com.wenting.mediaserver.protocol.rtsp.RtspSessionManager;
@@ -29,6 +32,42 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class RtmpConnectionHandlerTest {
+
+    @Test
+    void shouldSendUpstreamOnFiToRtmpPublisherWhenDerivedPlaybackRequestsKeyframe() {
+        RtspSessionManager rtspSessionManager = new RtspSessionManager();
+        RtmpSessionManager rtmpSessionManager = new RtmpSessionManager();
+        StreamRegistry registry = new StreamRegistry(rtspSessionManager, rtmpSessionManager);
+        StreamTransformOrchestrator orchestrator = new WebRtcPlaybackStreamTransformOrchestrator(
+                registry,
+                registry.webRtcPlaybackSuffix()
+        );
+        registry.setStreamTransformOrchestrator(orchestrator);
+        EmbeddedChannel channel = new EmbeddedChannel(new RtmpConnectionHandler(registry, rtmpSessionManager));
+        try {
+            Map<String, Object> connectObject = new LinkedHashMap<String, Object>();
+            connectObject.put("app", "live");
+            channel.writeInbound(new RtmpCommandMessage(3, 0L, 0, "connect", 1.0d, connectObject, Collections.<Object>emptyList()));
+            drainOutbound(channel, 4);
+            channel.writeInbound(new RtmpCommandMessage(3, 0L, 0, "createStream", 2.0d, null, Collections.<Object>emptyList()));
+            drainOutbound(channel, 1);
+            channel.writeInbound(new RtmpCommandMessage(5, 0L, 1, "publish", 0.0d, null, Collections.<Object>singletonList("camKey")));
+            channel.readOutbound();
+
+            DefaultPublishedStream derived = (DefaultPublishedStream) registry.findPublishedStreamByPath("live", "camKey__webrtc");
+            assertNotNull(derived);
+            assertTrue(derived.requestKeyFrame("video-h264"));
+
+            RtmpDataMessage onFi = channel.readOutbound();
+            assertNotNull(onFi);
+            assertEquals(5, onFi.chunkStreamId());
+            assertEquals(1, onFi.messageStreamId());
+            assertEquals(Collections.<Object>singletonList("onFI"), onFi.values());
+        } finally {
+            orchestrator.close();
+            channel.finishAndReleaseAll();
+        }
+    }
 
     @Test
     void shouldTrackInboundBytesPerSession() {

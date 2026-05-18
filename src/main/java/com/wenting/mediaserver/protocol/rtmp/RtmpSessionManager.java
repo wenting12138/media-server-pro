@@ -1,5 +1,7 @@
 package com.wenting.mediaserver.protocol.rtmp;
 
+import com.wenting.mediaserver.core.model.StreamKey;
+
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Map;
@@ -46,5 +48,20 @@ public final class RtmpSessionManager {
 
     public Collection<RtmpSession> sessions() {
         return Collections.unmodifiableCollection(sessionsById.values());
+    }
+
+    public RtmpSession findByStreamKey(StreamKey streamKey) {
+        if (streamKey == null) {
+            return null;
+        }
+        for (RtmpSession session : sessionsById.values()) {
+            if (session == null || !session.isPublisher() || session.streamKey() == null) {
+                continue;
+            }
+            if (streamKey.equals(session.streamKey())) {
+                return session;
+            }
+        }
+        return null;
     }
 }

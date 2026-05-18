@@ -11,6 +11,10 @@ public interface VideoFrameTranscoder extends AutoCloseable {
 
     List<InboundMediaFrame> transcode(CanonicalVideoFrame frame, StreamKey derivedKey);
 
+    default boolean requestKeyFrame() {
+        return false;
+    }
+
     @Override
     void close();
 }

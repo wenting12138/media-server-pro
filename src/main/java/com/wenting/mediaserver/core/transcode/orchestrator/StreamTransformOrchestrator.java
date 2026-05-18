@@ -18,6 +18,10 @@ public interface StreamTransformOrchestrator extends AutoCloseable {
     default void onPacket(InboundRtpPacket packet) {
     }
 
+    default boolean requestKeyFrame(StreamKey sourceKey, String trackId) {
+        return false;
+    }
+
     @Override
     void close();
 }

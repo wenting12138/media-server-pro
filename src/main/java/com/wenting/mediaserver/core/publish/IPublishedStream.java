@@ -20,6 +20,14 @@ public interface IPublishedStream {
 
     public void removeSubscriber(String sessionId);
 
+    default boolean requestKeyFrame(String trackId) {
+        return false;
+    }
+
+    default Long latestTrackSsrc(String trackId) {
+        return null;
+    }
+
     default String sdpDescription(StreamKey requestStreamKey) {
         return null;
     }

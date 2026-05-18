@@ -9,6 +9,8 @@ import java.util.UUID;
  */
 public final class RtmpSession {
 
+    private static final long MIN_KEYFRAME_REQUEST_INTERVAL_MS = 1000L;
+
     private final String sessionId;
     private volatile long createdAtMillis;
     private volatile long lastActivityAtMillis;
@@ -18,6 +20,8 @@ public final class RtmpSession {
     private volatile Integer messageStreamId;
     private volatile StreamKey streamKey;
     private volatile RtmpSessionRole role = RtmpSessionRole.UNKNOWN;
+    private volatile RtmpUpstreamControlSender upstreamControlSender;
+    private volatile long lastKeyFrameRequestAtMillis;
 
     public RtmpSession() {
         this(UUID.randomUUID().toString().replace("-", ""));
@@ -111,6 +115,26 @@ public final class RtmpSession {
 
     public boolean isSubscriber() {
         return role == RtmpSessionRole.SUBSCRIBER;
+    }
+
+    public void upstreamControlSender(RtmpUpstreamControlSender upstreamControlSender) {
+        this.upstreamControlSender = upstreamControlSender;
+    }
+
+    public boolean requestVideoKeyFrame(String trackId) {
+        RtmpUpstreamControlSender sender = upstreamControlSender;
+        if (sender == null) {
+            return false;
+        }
+        long now = System.currentTimeMillis();
+        if ((now - lastKeyFrameRequestAtMillis) < MIN_KEYFRAME_REQUEST_INTERVAL_MS) {
+            return false;
+        }
+        if (!sender.requestVideoKeyFrame(trackId)) {
+            return false;
+        }
+        lastKeyFrameRequestAtMillis = now;
+        return true;
     }
 
     private String normalize(String value) {

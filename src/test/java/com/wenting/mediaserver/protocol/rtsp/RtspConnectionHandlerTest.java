@@ -11,6 +11,8 @@ import com.wenting.mediaserver.core.publish.InboundMediaFrame;
 import com.wenting.mediaserver.core.registry.StreamRegistry;
 import com.wenting.mediaserver.core.stats.InMemoryTrafficStatsService;
 import com.wenting.mediaserver.core.enums.traffic.TrafficProtocol;
+import com.wenting.mediaserver.core.transcode.orchestrator.StreamTransformOrchestrator;
+import com.wenting.mediaserver.core.transcode.orchestrator.WebRtcPlaybackStreamTransformOrchestrator;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.embedded.EmbeddedChannel;
@@ -62,6 +64,77 @@ class RtspConnectionHandlerTest {
         payload.release();
         assertNull(channel.readOutbound());
         assertFalse(channel.finishAndReleaseAll());
+    }
+
+    @Test
+    void shouldSendUpstreamPliToRtspPublisherWhenDerivedPlaybackRequestsKeyframe() {
+        RtspSessionManager sessionManager = new RtspSessionManager();
+        StreamRegistry registry = new StreamRegistry(sessionManager);
+        StreamTransformOrchestrator orchestrator = new WebRtcPlaybackStreamTransformOrchestrator(
+                registry,
+                registry.webRtcPlaybackSuffix()
+        );
+        registry.setStreamTransformOrchestrator(orchestrator);
+        EmbeddedChannel publisherChannel = new EmbeddedChannel(new RtspConnectionHandler(registry));
+        try {
+            String sdp = "v=0\r\n"
+                    + "m=video 0 RTP/AVP 96\r\n"
+                    + "a=rtpmap:96 H264/90000\r\n"
+                    + "a=control:trackID=0\r\n";
+            publisherChannel.writeInbound(request(
+                    "ANNOUNCE",
+                    "rtsp://example/live/stream",
+                    sdp,
+                    "Content-Length", String.valueOf(sdp.length())
+            ));
+            assertResponse(publisherChannel.readOutbound(), RtspResponseStatuses.OK, "1", true).release();
+
+            publisherChannel.writeInbound(request(
+                    "SETUP",
+                    "rtsp://example/live/stream/trackID=0",
+                    "",
+                    "Transport", "RTP/AVP/TCP;unicast;interleaved=0-1"
+            ));
+            assertResponse(publisherChannel.readOutbound(), RtspResponseStatuses.OK, "1", true).release();
+
+            publisherChannel.writeInbound(request("RECORD", "rtsp://example/live/stream", ""));
+            assertResponse(publisherChannel.readOutbound(), RtspResponseStatuses.OK, "1", true).release();
+
+            ByteBuf rtpPayload = Unpooled.wrappedBuffer(new byte[]{
+                    (byte) 0x80, (byte) 0xE0, 0x12, 0x34,
+                    0x01, 0x02, 0x03, 0x04,
+                    0x11, 0x22, 0x33, 0x44,
+                    0x65, 0x11, 0x22
+            });
+            assertFalse(publisherChannel.writeInbound(new InterleavedRtpPacket(0, rtpPayload.retain())));
+            rtpPayload.release();
+
+            DefaultPublishedStream derived = (DefaultPublishedStream) registry.findPublishedStreamByPath("live", "stream__webrtc");
+            assertNotNull(derived);
+            assertTrue(derived.requestKeyFrame("trackID=0"));
+
+            ByteBuf pli = publisherChannel.readOutbound();
+            assertNotNull(pli);
+            assertEquals('$', pli.readByte());
+            assertEquals(1, pli.readUnsignedByte());
+            assertEquals(12, pli.readUnsignedShort());
+            assertEquals(0x81, pli.readUnsignedByte());
+            assertEquals(206, pli.readUnsignedByte());
+            assertEquals(0x00, pli.readUnsignedByte());
+            assertEquals(0x02, pli.readUnsignedByte());
+            assertEquals(0x00, pli.readUnsignedByte());
+            assertEquals(0x00, pli.readUnsignedByte());
+            assertEquals(0x00, pli.readUnsignedByte());
+            assertEquals(0x01, pli.readUnsignedByte());
+            assertEquals(0x11, pli.readUnsignedByte());
+            assertEquals(0x22, pli.readUnsignedByte());
+            assertEquals(0x33, pli.readUnsignedByte());
+            assertEquals(0x44, pli.readUnsignedByte());
+            pli.release();
+        } finally {
+            orchestrator.close();
+            publisherChannel.finishAndReleaseAll();
+        }
     }
 
     @Test

@@ -9,6 +9,7 @@ import com.wenting.mediaserver.core.publish.InboundMediaFrame;
 import com.wenting.mediaserver.core.publish.InboundRtpPacket;
 import com.wenting.mediaserver.core.publish.IPublishedStream;
 import com.wenting.mediaserver.core.enums.publish.MediaPacketTransport;
+import com.wenting.mediaserver.protocol.rtmp.RtmpSessionManager;
 import com.wenting.mediaserver.core.transcode.orchestrator.StreamTransformOrchestrator;
 import com.wenting.mediaserver.protocol.rtsp.RtspSession;
 import com.wenting.mediaserver.protocol.rtsp.RtspSessionManager;
@@ -34,21 +35,31 @@ public final class StreamRegistry {
     private static final String DEFAULT_WEBRTC_PLAYBACK_SUFFIX = "__webrtc";
 
     private final RtspSessionManager sessionManager;
+    private final RtmpSessionManager rtmpSessionManager;
     private final Map<StreamKey, IPublishedStream> published = new ConcurrentHashMap<StreamKey, IPublishedStream>();
     private final Map<Integer, RtspUdpBinding> udpPortBindings = new ConcurrentHashMap<Integer, RtspUdpBinding>();
     private final String webRtcPlaybackSuffix;
     private volatile StreamTransformOrchestrator streamTransformOrchestrator;
 
     public StreamRegistry() {
-        this(new RtspSessionManager());
+        this(new RtspSessionManager(), new RtmpSessionManager());
     }
 
     public StreamRegistry(RtspSessionManager sessionManager) {
-        this(sessionManager, DEFAULT_WEBRTC_PLAYBACK_SUFFIX);
+        this(sessionManager, new RtmpSessionManager(), DEFAULT_WEBRTC_PLAYBACK_SUFFIX);
+    }
+
+    public StreamRegistry(RtspSessionManager sessionManager, RtmpSessionManager rtmpSessionManager) {
+        this(sessionManager, rtmpSessionManager, DEFAULT_WEBRTC_PLAYBACK_SUFFIX);
     }
 
     public StreamRegistry(RtspSessionManager sessionManager, String webRtcPlaybackSuffix) {
+        this(sessionManager, new RtmpSessionManager(), webRtcPlaybackSuffix);
+    }
+
+    public StreamRegistry(RtspSessionManager sessionManager, RtmpSessionManager rtmpSessionManager, String webRtcPlaybackSuffix) {
         this.sessionManager = sessionManager == null ? new RtspSessionManager() : sessionManager;
+        this.rtmpSessionManager = rtmpSessionManager == null ? new RtmpSessionManager() : rtmpSessionManager;
         this.webRtcPlaybackSuffix = webRtcPlaybackSuffix == null || webRtcPlaybackSuffix.trim().isEmpty()
                 ? DEFAULT_WEBRTC_PLAYBACK_SUFFIX
                 : webRtcPlaybackSuffix.trim();
@@ -58,7 +69,7 @@ public final class StreamRegistry {
         if (key == null || stream == null) {
             throw new IllegalArgumentException("key and stream must not be null");
         }
-        attachOrderedPacketObserver(stream);
+        attachStreamObservers(key, stream);
         IPublishedStream previous = published.put(key, stream);
         StreamTransformOrchestrator manager = streamTransformOrchestrator;
         if (manager != null) {
@@ -126,8 +137,8 @@ public final class StreamRegistry {
 
     public void setStreamTransformOrchestrator(StreamTransformOrchestrator streamTransformOrchestrator) {
         this.streamTransformOrchestrator = streamTransformOrchestrator;
-        for (IPublishedStream stream : published.values()) {
-            attachOrderedPacketObserver(stream);
+        for (Map.Entry<StreamKey, IPublishedStream> entry : published.entrySet()) {
+            attachStreamObservers(entry.getKey(), entry.getValue());
         }
     }
 
@@ -193,14 +204,37 @@ public final class StreamRegistry {
         stream.onInboundRtpPacket(packet);
     }
 
-    private void attachOrderedPacketObserver(IPublishedStream stream) {
+    private void attachStreamObservers(StreamKey key, IPublishedStream stream) {
         if (!(stream instanceof DefaultPublishedStream)) {
             return;
         }
         StreamTransformOrchestrator manager = streamTransformOrchestrator;
-        ((DefaultPublishedStream) stream).setOrderedRtpPacketObserver(
+        DefaultPublishedStream publishedStream = (DefaultPublishedStream) stream;
+        publishedStream.setOrderedRtpPacketObserver(
                 manager == null ? null : manager::onPacket
         );
+        publishedStream.setKeyFrameRequestHandler(
+                manager == null || !isDerivedPlaybackStream(key)
+                        ? null
+                        : new com.wenting.mediaserver.core.publish.KeyFrameRequestHandler() {
+                            @Override
+                            public boolean requestKeyFrame(String trackId) {
+                                return manager.requestKeyFrame(sourceKeyForDerived(key), trackId);
+                            }
+                        }
+        );
+    }
+
+    private boolean isDerivedPlaybackStream(StreamKey key) {
+        return key != null && key.stream() != null && key.stream().endsWith(webRtcPlaybackSuffix);
+    }
+
+    private StreamKey sourceKeyForDerived(StreamKey derivedKey) {
+        if (!isDerivedPlaybackStream(derivedKey)) {
+            return derivedKey;
+        }
+        String sourceStream = derivedKey.stream().substring(0, derivedKey.stream().length() - webRtcPlaybackSuffix.length());
+        return new StreamKey(derivedKey.protocol(), derivedKey.app(), sourceStream);
     }
 
     private ITrack resolveTrack(String sessionId, String trackId) {
@@ -213,5 +247,9 @@ public final class StreamRegistry {
 
     public RtspSessionManager getRtspSessionManager() {
         return sessionManager;
+    }
+
+    public RtmpSessionManager getRtmpSessionManager() {
+        return rtmpSessionManager;
     }
 }

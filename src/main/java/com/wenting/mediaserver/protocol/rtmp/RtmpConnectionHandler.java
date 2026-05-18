@@ -9,6 +9,7 @@ import com.wenting.mediaserver.core.registry.StreamRegistry;
 import com.wenting.mediaserver.core.track.ITrack;
 import com.wenting.mediaserver.core.codec.rtmp.RtmpAudioMessage;
 import com.wenting.mediaserver.core.codec.rtmp.RtmpCommandMessage;
+import com.wenting.mediaserver.core.codec.rtmp.RtmpDataMessage;
 import com.wenting.mediaserver.core.codec.rtmp.RtmpMessage;
 import com.wenting.mediaserver.core.codec.rtmp.RtmpSetChunkSizeMessage;
 import com.wenting.mediaserver.core.codec.rtmp.RtmpSetPeerBandwidthMessage;
@@ -23,6 +24,7 @@ import org.slf4j.LoggerFactory;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -218,6 +220,7 @@ public final class RtmpConnectionHandler extends SimpleChannelInboundHandler<Rtm
             StreamKey streamKey = new StreamKey(StreamProtocol.RTMP, session().app(), session().streamName());
             session().streamKey(streamKey);
             session().role(RtmpSessionRole.PUBLISHER);
+            session().upstreamControlSender(buildPublisherControlSender(ctx));
             ensurePublishedStream(streamKey);
         }
         Map<String, Object> information = new LinkedHashMap<String, Object>();
@@ -449,9 +452,37 @@ public final class RtmpConnectionHandler extends SimpleChannelInboundHandler<Rtm
 
     private void clearStreamingState() {
         session().role(RtmpSessionRole.UNKNOWN);
+        session().upstreamControlSender(null);
         session().streamKey(null);
         session().streamName(null);
         session().messageStreamId(null);
+    }
+
+    private RtmpUpstreamControlSender buildPublisherControlSender(ChannelHandlerContext ctx) {
+        return new RtmpUpstreamControlSender() {
+            @Override
+            public boolean requestVideoKeyFrame(String trackId) {
+                Integer messageStreamId = session().messageStreamId();
+                if (!session().isPublisher() || messageStreamId == null || messageStreamId.intValue() <= 0) {
+                    return false;
+                }
+                if (ctx == null || ctx.channel() == null || !ctx.channel().isActive()) {
+                    return false;
+                }
+                ctx.writeAndFlush(new RtmpDataMessage(
+                        5,
+                        0L,
+                        messageStreamId.intValue(),
+                        Collections.<Object>singletonList("onFI")
+                ));
+                log.info("Sent RTMP upstream onFI session={} stream={} track={} messageStreamId={}",
+                        session().sessionId(),
+                        session().streamKey(),
+                        trackId,
+                        messageStreamId);
+                return true;
+            }
+        };
     }
 
     private String firstStringArgument(RtmpCommandMessage message) {

@@ -37,7 +37,7 @@ public final class MediaServerBootstrap implements AutoCloseable {
         this.rtmpSessionManager = new RtmpSessionManager();
         this.sessionManager = new RtspSessionManager();
         this.webRtcSessionManager = new WebRtcSessionManager();
-        this.registry = new StreamRegistry(sessionManager);
+        this.registry = new StreamRegistry(sessionManager, rtmpSessionManager);
         this.streamTransformOrchestrator = new WebRtcPlaybackStreamTransformOrchestrator(
                 registry,
                 registry.webRtcPlaybackSuffix()

@@ -21,6 +21,7 @@ import com.wenting.mediaserver.core.enums.traffic.TrafficProtocol;
 import com.wenting.mediaserver.core.stats.TrafficStatsService;
 import io.netty.buffer.ByteBufUtil;
 import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.Channel;
 import io.netty.buffer.Unpooled;
 import io.netty.handler.codec.http.DefaultFullHttpResponse;
 import io.netty.handler.codec.http.FullHttpResponse;
@@ -76,6 +77,7 @@ public final class RtspSessionStateMachine {
 
     public void handleRequest(ChannelHandlerContext ctx, RtspRequestMessage request) {
         session.touch();
+        bindUpstreamControlSender(ctx);
         recordControlInbound(request);
         RtspRequestType requestType = RtspRequestType.fromMethod(request.method());
         log.info("RTSP {} session={} state={} uri={}", requestType.methodName(), session.sessionId(), session.state(), request.uri());
@@ -537,6 +539,144 @@ public final class RtspSessionStateMachine {
             }
         }
         return null;
+    }
+
+    private void bindUpstreamControlSender(ChannelHandlerContext ctx) {
+        if (ctx == null) {
+            return;
+        }
+        final Channel controlChannel = ctx.channel();
+        session.upstreamControlSender(new RtspUpstreamControlSender() {
+            @Override
+            public boolean requestVideoKeyFrame(String trackId, long mediaSsrc) {
+                return sendUpstreamPli(controlChannel, trackId, mediaSsrc);
+            }
+        });
+    }
+
+    private boolean sendUpstreamPli(Channel controlChannel, String trackId, long mediaSsrc) {
+        if (!session.isPublisher()) {
+            return false;
+        }
+        RtspTransport transport = session.transport(trackId);
+        if (transport == null) {
+            return false;
+        }
+        ITrack track = session.findTrack(trackId);
+        if (track == null || track.trackType() != TrackType.VIDEO) {
+            return false;
+        }
+        byte[] pli = buildPictureLossIndication(mediaSsrc);
+        if (transport.usesInterleavedTcp()) {
+            Integer channel = transport.interleavedRtcpChannel();
+            if (channel == null || controlChannel == null || !controlChannel.isActive()) {
+                return false;
+            }
+            io.netty.buffer.ByteBuf out = Unpooled.buffer(4 + pli.length);
+            out.writeByte('$');
+            out.writeByte(channel.intValue());
+            out.writeShort(pli.length);
+            out.writeBytes(pli);
+            controlChannel.writeAndFlush(out);
+            recordOutboundRtcpTcp(trackId, pli.length);
+            log.info("Sent RTSP upstream PLI over TCP session={} track={} mediaSsrc={} channel={}",
+                    session.sessionId(), trackId, mediaSsrc, channel);
+            return true;
+        }
+        if (transport.usesUdp() && rtpUdpChannelManager != null) {
+            Integer clientRtcpPort = transport.clientRtcpPort();
+            Integer serverRtcpPort = transport.serverRtcpPort();
+            if (clientRtcpPort == null || serverRtcpPort == null) {
+                return false;
+            }
+            java.net.InetSocketAddress remoteAddress = resolvePublisherRemoteAddress(controlChannel, track, clientRtcpPort.intValue());
+            if (remoteAddress == null) {
+                return false;
+            }
+            InboundRtpPacket packet = new InboundRtpPacket(
+                    new InboundMediaFrame(
+                            StreamProtocol.RTSP,
+                            TrackType.VIDEO,
+                            track.codecType(),
+                            session.sessionId(),
+                            session.streamKey(),
+                            trackId,
+                            null,
+                            null,
+                            false,
+                            false,
+                            track.outOfBandParameterSetsReady(),
+                            remoteAddress,
+                            pli
+                    ),
+                    track.clockRate(),
+                    true,
+                    MediaPacketTransport.UDP,
+                    Integer.valueOf(serverRtcpPort.intValue()),
+                    null
+            );
+            boolean sent = rtpUdpChannelManager.send(packet, serverRtcpPort.intValue(), remoteAddress);
+            if (sent) {
+                log.info("Sent RTSP upstream PLI over UDP session={} track={} mediaSsrc={} localPort={} remote={}",
+                        session.sessionId(), trackId, mediaSsrc, serverRtcpPort, remoteAddress);
+            }
+            return sent;
+        }
+        return false;
+    }
+
+    private java.net.InetSocketAddress resolvePublisherRemoteAddress(Channel controlChannel, ITrack track, int clientRtcpPort) {
+        if (track != null && isUsableConnectionAddress(track.connectionAddress())) {
+            return new java.net.InetSocketAddress(track.connectionAddress(), clientRtcpPort);
+        }
+        if (controlChannel == null || !(controlChannel.remoteAddress() instanceof java.net.InetSocketAddress)) {
+            return null;
+        }
+        java.net.InetSocketAddress remoteAddress = (java.net.InetSocketAddress) controlChannel.remoteAddress();
+        return new java.net.InetSocketAddress(remoteAddress.getAddress(), clientRtcpPort);
+    }
+
+    private boolean isUsableConnectionAddress(String connectionAddress) {
+        if (connectionAddress == null) {
+            return false;
+        }
+        String trimmed = connectionAddress.trim();
+        return !trimmed.isEmpty()
+                && !"0.0.0.0".equals(trimmed)
+                && !"::".equals(trimmed);
+    }
+
+    private byte[] buildPictureLossIndication(long mediaSsrc) {
+        byte[] packet = new byte[12];
+        packet[0] = (byte) 0x81;
+        packet[1] = (byte) 206;
+        packet[2] = 0x00;
+        packet[3] = 0x02;
+        packet[4] = 0x00;
+        packet[5] = 0x00;
+        packet[6] = 0x00;
+        packet[7] = 0x01;
+        packet[8] = (byte) ((mediaSsrc >>> 24) & 0xFF);
+        packet[9] = (byte) ((mediaSsrc >>> 16) & 0xFF);
+        packet[10] = (byte) ((mediaSsrc >>> 8) & 0xFF);
+        packet[11] = (byte) (mediaSsrc & 0xFF);
+        return packet;
+    }
+
+    private void recordOutboundRtcpTcp(String trackId, int bytes) {
+        if (trafficStatsService == null) {
+            return;
+        }
+        trafficStatsService.record(new TrafficEvent(
+                TrafficDirection.OUTBOUND,
+                TrafficProtocol.RTCP_TCP_INTERLEAVED,
+                session.streamKey(),
+                session.sessionId(),
+                trackId,
+                bytes,
+                1,
+                System.currentTimeMillis()
+        ));
     }
 
 }

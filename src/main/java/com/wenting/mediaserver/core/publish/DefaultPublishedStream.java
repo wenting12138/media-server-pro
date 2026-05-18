@@ -61,6 +61,7 @@ public final class DefaultPublishedStream implements IPublishedStream {
     private final Map<String, MediaSubscriberAdapter> subscribersBySessionId = new ConcurrentHashMap<String, MediaSubscriberAdapter>();
     private final Map<String, SubscriberPlaybackState> playbackStatesBySessionId = new ConcurrentHashMap<String, SubscriberPlaybackState>();
     private volatile OrderedRtpPacketObserver orderedRtpPacketObserver;
+    private volatile KeyFrameRequestHandler keyFrameRequestHandler;
 
 
     public DefaultPublishedStream(StreamKey key) {
@@ -114,6 +115,22 @@ public final class DefaultPublishedStream implements IPublishedStream {
 
     public void setOrderedRtpPacketObserver(OrderedRtpPacketObserver orderedRtpPacketObserver) {
         this.orderedRtpPacketObserver = orderedRtpPacketObserver;
+    }
+
+    public void setKeyFrameRequestHandler(KeyFrameRequestHandler keyFrameRequestHandler) {
+        this.keyFrameRequestHandler = keyFrameRequestHandler;
+    }
+
+    @Override
+    public boolean requestKeyFrame(String trackId) {
+        KeyFrameRequestHandler handler = keyFrameRequestHandler;
+        return handler != null && handler.requestKeyFrame(trackId);
+    }
+
+    @Override
+    public Long latestTrackSsrc(String trackId) {
+        PublishedTrackContext context = publishedTrackContext(trackId);
+        return context == null ? null : context.latestSsrc();
     }
 
     @Override
@@ -465,6 +482,7 @@ public final class DefaultPublishedStream implements IPublishedStream {
             return;
         }
         context.latestRtpTimestamp(Long.valueOf(header.timestamp()));
+        context.latestSsrc(Long.valueOf(header.ssrc()));
         context.clockRate(Integer.valueOf(packet.clockRate()));
         context.trackType(packet.frame().trackType());
         if (packet.frame().outOfBandParameterSetsReady()) {

@@ -27,6 +27,7 @@ public final class RtspSession {
     private StreamKey streamKey;
     private String sdpOrigin;
     private SdpSessionDescription sdpSessionDescription;
+    private volatile RtspUpstreamControlSender upstreamControlSender;
     private final long createdAtMillis;
     private long lastTouchedAtMillis;
 
@@ -188,6 +189,15 @@ public final class RtspSession {
     public void close() {
         this.state = RtspSessionState.CLOSED;
         touch();
+    }
+
+    public void upstreamControlSender(RtspUpstreamControlSender upstreamControlSender) {
+        this.upstreamControlSender = upstreamControlSender;
+    }
+
+    public boolean requestVideoKeyFrame(String trackId, long mediaSsrc) {
+        RtspUpstreamControlSender sender = upstreamControlSender;
+        return sender != null && sender.requestVideoKeyFrame(trackId, mediaSsrc);
     }
 
     @Override

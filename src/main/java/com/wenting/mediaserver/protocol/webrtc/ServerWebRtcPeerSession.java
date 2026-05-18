@@ -361,6 +361,7 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
                 log.info("WebRTC PLI received session={} stream={} track={} mediaSsrc={} totalPli={}",
                         sessionId, streamKey, trackId, mediaSsrc, count);
                 replayLatestRecoveryPackets(trackId);
+                requestFreshKeyFrame(trackId);
             }
 
             @Override
@@ -442,6 +443,16 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
                 sessionId, streamKey, trackId, replayed,
                 configPackets != null && !configPackets.isEmpty(),
                 keyFramePackets != null && !keyFramePackets.isEmpty());
+    }
+
+    private void requestFreshKeyFrame(String trackId) {
+        IPublishedStream stream = publishedStream;
+        if (stream == null) {
+            return;
+        }
+        boolean accepted = stream.requestKeyFrame(trackId);
+        log.info("WebRTC keyframe request forwarded session={} stream={} track={} accepted={}",
+                sessionId, streamKey, trackId, accepted);
     }
 
     private int replayPackets(List<byte[]> packets, InetSocketAddress target) {

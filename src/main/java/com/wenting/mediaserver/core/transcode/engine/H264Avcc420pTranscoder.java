@@ -73,6 +73,7 @@ public final class H264Avcc420pTranscoder implements VideoFrameTranscoder {
     private boolean encoderReady;
     private boolean decoderPrimed;
     private long encPts;
+    private volatile boolean forceNextKeyFrameRequested;
 
     @Override
     public List<InboundMediaFrame> transcode(CanonicalVideoFrame frame, StreamKey derivedKey) {
@@ -112,6 +113,15 @@ public final class H264Avcc420pTranscoder implements VideoFrameTranscoder {
         return drainDecodedFrames(frame, derivedKey);
     }
 
+    @Override
+    public boolean requestKeyFrame() {
+        forceNextKeyFrameRequested = true;
+        if (lastSequenceHeaderBytes != null) {
+            pendingSequenceHeaderBytes = Arrays.copyOf(lastSequenceHeaderBytes, lastSequenceHeaderBytes.length);
+        }
+        return true;
+    }
+
     private List<InboundMediaFrame> drainDecodedFrames(CanonicalVideoFrame sourceFrame, StreamKey derivedKey) {
         List<InboundMediaFrame> outputs = new ArrayList<InboundMediaFrame>(2);
         int rc;
@@ -123,9 +133,13 @@ public final class H264Avcc420pTranscoder implements VideoFrameTranscoder {
             if (frameForEncode == null) {
                 break;
             }
-            if (sourceFrame.keyFrame()) {
+            boolean forceKeyFrame = forceNextKeyFrameRequested;
+            if (sourceFrame.keyFrame() || forceKeyFrame) {
                 frameForEncode.key_frame(1);
                 frameForEncode.pict_type(AV_PICTURE_TYPE_I);
+                if (forceKeyFrame) {
+                    forceNextKeyFrameRequested = false;
+                }
             }
             frameForEncode.pts(encPts++);
             rc = avcodec_send_frame(encCtx, frameForEncode);

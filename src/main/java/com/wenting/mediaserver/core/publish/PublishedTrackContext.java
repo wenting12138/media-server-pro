@@ -31,6 +31,7 @@ public final class PublishedTrackContext {
     private final TrackFramePayloadHandler framePayloadHandler;
     private final List<InboundRtpPacket> pendingKeyFrameAccessUnitPackets = new ArrayList<InboundRtpPacket>();
     private volatile Long latestRtpTimestamp;
+    private volatile Long latestSsrc;
     private volatile Integer clockRate;
     private volatile TrackType trackType;
     private volatile boolean outOfBandParameterSetsReady;
@@ -109,6 +110,14 @@ public final class PublishedTrackContext {
 
     public void latestRtpTimestamp(Long latestRtpTimestamp) {
         this.latestRtpTimestamp = latestRtpTimestamp;
+    }
+
+    public Long latestSsrc() {
+        return latestSsrc;
+    }
+
+    public void latestSsrc(Long latestSsrc) {
+        this.latestSsrc = latestSsrc;
     }
 
     public Integer clockRate() {

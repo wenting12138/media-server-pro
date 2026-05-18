@@ -6,6 +6,7 @@ import com.wenting.mediaserver.core.enums.publish.TrackType;
 import com.wenting.mediaserver.core.model.StreamKey;
 import com.wenting.mediaserver.core.publish.InboundMediaFrame;
 import com.wenting.mediaserver.core.publish.InboundRtpPacket;
+import com.wenting.mediaserver.core.registry.StreamRegistry;
 import com.wenting.mediaserver.core.transcode.canonical.AudioFrameCanonicalizer;
 import com.wenting.mediaserver.core.transcode.canonical.RtmpAvccH264Canonicalizer;
 import com.wenting.mediaserver.core.transcode.canonical.RtmpAudioCanonicalizer;
@@ -23,7 +24,9 @@ import com.wenting.mediaserver.core.transcode.policy.WebRtcH264ProfileDecisionPo
 import com.wenting.mediaserver.core.track.ITrack;
 import com.wenting.mediaserver.core.transcode.publish.DefaultDerivedStreamPublisher;
 import com.wenting.mediaserver.core.transcode.publish.DerivedStreamPublisher;
+import com.wenting.mediaserver.core.publish.IPublishedStream;
 import com.wenting.mediaserver.protocol.rtsp.RtspSession;
+import com.wenting.mediaserver.protocol.rtmp.RtmpSession;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -36,7 +39,7 @@ public final class WebRtcPlaybackStreamTransformOrchestrator implements StreamTr
     private static final int DEFAULT_VIDEO_QUEUE_SIZE = 24;
     private static final int DEFAULT_AUDIO_QUEUE_SIZE = 48;
 
-    private final com.wenting.mediaserver.core.registry.StreamRegistry registry;
+    private final StreamRegistry registry;
     private final DerivedStreamPublisher publisher;
     private final String playbackSuffix;
     private final int videoQueueSize;
@@ -47,7 +50,7 @@ public final class WebRtcPlaybackStreamTransformOrchestrator implements StreamTr
             new ConcurrentHashMap<StreamKey, AudioTranscodeWorker>();
 
     public WebRtcPlaybackStreamTransformOrchestrator(
-            com.wenting.mediaserver.core.registry.StreamRegistry registry,
+            StreamRegistry registry,
             String playbackSuffix
     ) {
         this(
@@ -60,7 +63,7 @@ public final class WebRtcPlaybackStreamTransformOrchestrator implements StreamTr
     }
 
     private WebRtcPlaybackStreamTransformOrchestrator(
-            com.wenting.mediaserver.core.registry.StreamRegistry registry,
+            StreamRegistry registry,
             DerivedStreamPublisher publisher,
             String playbackSuffix,
             int videoQueueSize,
@@ -156,6 +159,32 @@ public final class WebRtcPlaybackStreamTransformOrchestrator implements StreamTr
             }
         }
         audioWorkersBySourceKey.clear();
+    }
+
+    @Override
+    public boolean requestKeyFrame(StreamKey sourceKey, String trackId) {
+        if (sourceKey == null || isDerivedStream(sourceKey)) {
+            return false;
+        }
+        TranscodeWorker worker = ensureVideoWorker(sourceKey);
+        boolean accepted = false;
+        if (worker != null) {
+            accepted = worker.requestKeyFrame(trackId);
+        }
+        if (sourceKey.protocol() == StreamProtocol.RTSP && registry != null && registry.getRtspSessionManager() != null) {
+            RtspSession session = registry.getRtspSessionManager().findByStreamKey(sourceKey);
+            if (session != null) {
+                long mediaSsrc = resolveLatestTrackSsrc(sourceKey, trackId);
+                accepted = session.requestVideoKeyFrame(trackId, mediaSsrc) || accepted;
+            }
+        }
+        if (sourceKey.protocol() == StreamProtocol.RTMP && registry != null && registry.getRtmpSessionManager() != null) {
+            RtmpSession session = registry.getRtmpSessionManager().findByStreamKey(sourceKey);
+            if (session != null) {
+                accepted = session.requestVideoKeyFrame(trackId) || accepted;
+            }
+        }
+        return accepted;
     }
 
     private TranscodeWorker ensureVideoWorker(StreamKey sourceKey) {
@@ -281,5 +310,14 @@ public final class WebRtcPlaybackStreamTransformOrchestrator implements StreamTr
                 || frame.codecType() == CodecType.MPEG4_GENERIC
                 || frame.codecType() == CodecType.G711A
                 || frame.codecType() == CodecType.G711U;
+    }
+
+    private long resolveLatestTrackSsrc(StreamKey sourceKey, String trackId) {
+        if (registry == null || sourceKey == null) {
+            return 0L;
+        }
+        IPublishedStream stream = registry.findPublishedStream(sourceKey);
+        Long ssrc = stream == null ? null : stream.latestTrackSsrc(trackId);
+        return ssrc == null ? 0L : (ssrc.longValue() & 0xFFFFFFFFL);
     }
 }

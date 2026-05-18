@@ -36,6 +36,7 @@ final class TranscodeWorker implements Runnable {
     private final Thread thread;
     private volatile TransformDecision transformDecision = TransformDecision.PENDING;
     private volatile VideoFrameTranscoder transcoder;
+    private final AtomicBoolean keyFrameRequestPending = new AtomicBoolean(false);
 
     private TranscodeWorker(
             StreamKey sourceKey,
@@ -95,6 +96,15 @@ final class TranscodeWorker implements Runnable {
             publisher.removeStream(derivedKey);
         }
         log.info("Stopped stream transform worker source={} derived={}", sourceKey, derivedKey);
+    }
+
+    boolean requestKeyFrame(String trackId) {
+        keyFrameRequestPending.set(true);
+        VideoFrameTranscoder activeTranscoder = transcoder;
+        boolean accepted = activeTranscoder != null && activeTranscoder.requestKeyFrame();
+        log.info("Requested derived video keyframe source={} derived={} track={} decision={} transcoderReady={} accepted={}",
+                sourceKey, derivedKey, trackId, transformDecision, activeTranscoder != null, accepted);
+        return accepted || transformDecision != TransformDecision.PASSTHROUGH;
     }
 
     void enqueueFrame(InboundMediaFrame frame) {
@@ -200,6 +210,9 @@ final class TranscodeWorker implements Runnable {
                 VideoFrameTranscoder activeTranscoder = ensureTranscoder();
                 if (activeTranscoder == null) {
                     continue;
+                }
+                if (keyFrameRequestPending.compareAndSet(true, false)) {
+                    activeTranscoder.requestKeyFrame();
                 }
                 List<InboundMediaFrame> outputs = activeTranscoder.transcode(frame, derivedKey);
                 for (InboundMediaFrame output : outputs) {

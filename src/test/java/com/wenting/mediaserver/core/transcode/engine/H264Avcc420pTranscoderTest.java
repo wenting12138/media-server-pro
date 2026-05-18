@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.Arrays;
 
 final class H264Avcc420pTranscoderTest {
 
@@ -76,6 +77,28 @@ final class H264Avcc420pTranscoderTest {
             Assertions.assertEquals(0x67, mediaPayload[4] & 0xFF);
             Assertions.assertEquals(0x01, configPayload[0] & 0xFF);
             Assertions.assertNotEquals(0x17, configPayload[0] & 0xFF);
+        } finally {
+            transcoder.close();
+        }
+    }
+
+    @Test
+    void requestKeyFrameShouldArmSequenceHeaderReplay() throws Exception {
+        H264Avcc420pTranscoder transcoder = new H264Avcc420pTranscoder();
+        try {
+            Field lastSequenceHeaderBytes = H264Avcc420pTranscoder.class.getDeclaredField("lastSequenceHeaderBytes");
+            Field pendingSequenceHeaderBytes = H264Avcc420pTranscoder.class.getDeclaredField("pendingSequenceHeaderBytes");
+            Field forceNextKeyFrameRequested = H264Avcc420pTranscoder.class.getDeclaredField("forceNextKeyFrameRequested");
+            lastSequenceHeaderBytes.setAccessible(true);
+            pendingSequenceHeaderBytes.setAccessible(true);
+            forceNextKeyFrameRequested.setAccessible(true);
+
+            byte[] sequenceHeader = new byte[]{0x01, 0x64, 0x00, 0x1F};
+            lastSequenceHeaderBytes.set(transcoder, sequenceHeader);
+
+            Assertions.assertTrue(transcoder.requestKeyFrame());
+            Assertions.assertTrue((Boolean) forceNextKeyFrameRequested.get(transcoder));
+            Assertions.assertTrue(Arrays.equals(sequenceHeader, (byte[]) pendingSequenceHeaderBytes.get(transcoder)));
         } finally {
             transcoder.close();
         }
