@@ -20,6 +20,7 @@ public final class WebRtcIngestFeedbackController {
 
     private static final Logger log = LoggerFactory.getLogger(WebRtcIngestFeedbackController.class);
     private static final long RECEIVER_REPORT_INTERVAL_MS = 1000L;
+    private static final long PLI_INTERVAL_MS = 1000L;
     private static final int MAX_NACK_BATCH = 32;
 
     private final RTCPeerConnection peerConnection;
@@ -99,7 +100,8 @@ public final class WebRtcIngestFeedbackController {
                     }
                 }
             }
-            java.util.List<Integer> dueNacks = state.nackGenerator.pollDueNacks(nowMs, MAX_NACK_BATCH);
+            PollResult nackResult = state.nackGenerator.poll(nowMs, MAX_NACK_BATCH);
+            java.util.List<Integer> dueNacks = nackResult.lostSequenceNumbers();
             if (!dueNacks.isEmpty()) {
                 boolean sent = peerConnection.sendGenericNack(
                         state.transceiver.getSender().getSsrc(),
@@ -114,6 +116,21 @@ public final class WebRtcIngestFeedbackController {
                             state.transceiver.getSender().getSsrc() & 0xFFFFFFFFL,
                             dueNacks.size(),
                             dueNacks);
+                }
+            }
+            if (nackResult.requestKeyFrameRecovery() && (nowMs - state.lastPliSentAtMs) >= PLI_INTERVAL_MS) {
+                boolean sent = peerConnection.sendPictureLossIndication(
+                        state.transceiver.getSender().getSsrc(),
+                        state.stats.mediaSsrc()
+                );
+                if (sent) {
+                    state.lastPliSentAtMs = nowMs;
+                    state.pliSent++;
+                    log.info("Sent WebRTC ingest PLI track={} mediaSsrc={} receiverSsrc={} totalPli={}",
+                            state.trackId,
+                            state.stats.mediaSsrc(),
+                            state.transceiver.getSender().getSsrc() & 0xFFFFFFFFL,
+                            state.pliSent);
                 }
             }
         }

@@ -1,6 +1,7 @@
 package com.wenting.mediaserver.protocol.webrtc.api;
 
 import com.wenting.mediaserver.core.codec.rtcp.RtcpGenericNackPacket;
+import com.wenting.mediaserver.core.codec.rtcp.RtcpPictureLossIndicationPacket;
 import com.wenting.mediaserver.core.codec.rtcp.RtcpReceiverReportPacket;
 import com.wenting.mediaserver.core.codec.rtcp.RtcpReportBlock;
 import com.wenting.mediaserver.core.codec.rtp.RtpPacketParser;
@@ -66,5 +67,21 @@ class RTCPeerConnectionReceiverReportTest {
         assertEquals(0x55667788L, nackPacket.senderSsrc());
         assertEquals(0x11223344L, nackPacket.mediaSsrc());
         assertEquals(Arrays.asList(1001, 1002, 1005, 1006, 1019), nackPacket.lostSequenceNumbers());
+    }
+
+    @Test
+    void shouldEncodePictureLossIndicationPacket() {
+        byte[] packet = ReportPacketUtil.encodePictureLossIndicationPacket(
+                0x55667788L,
+                0x11223344L
+        );
+
+        RtpParseResult parseResult = new RtpPacketParser().parse(packet);
+        assertTrue(parseResult.rtcp());
+        assertTrue(parseResult.rtcpPacket() instanceof RtcpPictureLossIndicationPacket);
+
+        RtcpPictureLossIndicationPacket pliPacket = (RtcpPictureLossIndicationPacket) parseResult.rtcpPacket();
+        assertEquals(0x55667788L, pliPacket.senderSsrc());
+        assertEquals(0x11223344L, pliPacket.mediaSsrc());
     }
 }

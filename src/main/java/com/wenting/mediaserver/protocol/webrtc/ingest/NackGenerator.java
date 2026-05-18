@@ -10,7 +10,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Tracks short-lived RTP gaps and determines when Generic NACK should be sent.
+ * Tracks short-lived RTP gaps and determines when Generic NACK or PLI should be sent.
  */
 public final class NackGenerator {
 
@@ -75,39 +75,46 @@ public final class NackGenerator {
         pruneExpired(nowMs);
     }
 
-    public synchronized List<Integer> pollDueNacks(long nowMs, int maxSequenceCount) {
-        pruneExpired(nowMs);
+    public synchronized PollResult poll(long nowMs, int maxSequenceCount) {
+        boolean requestKeyFrameRecovery = pruneExpired(nowMs);
         if (pendingBySequence.isEmpty() || maxSequenceCount <= 0) {
-            return Collections.emptyList();
+            return new PollResult(Collections.<Integer>emptyList(), requestKeyFrameRecovery);
         }
-        List<Integer> result = new ArrayList<Integer>();
+        List<Integer> dueNacks = new ArrayList<Integer>();
         Iterator<Map.Entry<Integer, MissingSequence>> iterator = pendingBySequence.entrySet().iterator();
-        while (iterator.hasNext() && result.size() < maxSequenceCount) {
+        while (iterator.hasNext() && dueNacks.size() < maxSequenceCount) {
             Map.Entry<Integer, MissingSequence> entry = iterator.next();
             MissingSequence missing = entry.getValue();
             if (missing == null || !missing.isDue(nowMs, initialDelayMs, retryIntervalMs)) {
                 continue;
             }
-            result.add(entry.getKey());
+            dueNacks.add(entry.getKey());
             missing.retries++;
             missing.lastSentAtMs = nowMs;
             if (missing.retries >= maxRetries) {
+                requestKeyFrameRecovery = true;
                 iterator.remove();
             }
         }
-        return result;
+        return new PollResult(dueNacks, requestKeyFrameRecovery);
     }
 
-    private void pruneExpired(long nowMs) {
+    private boolean pruneExpired(long nowMs) {
+        boolean requestKeyFrameRecovery = false;
         Iterator<Map.Entry<Integer, MissingSequence>> iterator = pendingBySequence.entrySet().iterator();
         while (iterator.hasNext()) {
             Map.Entry<Integer, MissingSequence> entry = iterator.next();
             MissingSequence missing = entry.getValue();
-            if (missing == null || (nowMs - missing.firstSeenAtMs) > expiryMs) {
+            if (missing == null) {
+                iterator.remove();
+                continue;
+            }
+            if ((nowMs - missing.firstSeenAtMs) > expiryMs) {
+                requestKeyFrameRecovery = true;
                 iterator.remove();
             }
         }
+        return requestKeyFrameRecovery;
     }
-
 
 }

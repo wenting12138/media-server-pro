@@ -500,6 +500,21 @@ public class RTCPeerConnection implements AutoCloseable {
         return true;
     }
 
+    public boolean sendPictureLossIndication(long senderSsrc, long mediaSsrc) {
+        InetSocketAddress addr = remoteAddress;
+        SrtpCryptoContext context = resolveInboundSrtcpContext();
+        if (addr == null || context == null) {
+            return false;
+        }
+        byte[] plainRtcp = ReportPacketUtil.encodePictureLossIndicationPacket(senderSsrc, mediaSsrc);
+        byte[] protectedRtcp = new SrtcpTransform(context).protect(plainRtcp);
+        transport.send(protectedRtcp, addr).exceptionally(ex -> {
+            LOG.warn("Failed to send SRTCP PLI: {}", ex.getMessage());
+            return null;
+        });
+        return true;
+    }
+
     // ========================================================================
     // Public API — Lifecycle
     // ========================================================================

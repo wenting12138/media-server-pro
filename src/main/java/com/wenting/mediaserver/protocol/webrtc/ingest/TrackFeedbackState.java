@@ -10,7 +10,9 @@ public final class TrackFeedbackState {
     public volatile boolean firstReportLogged;
     public volatile long reportsSent;
     public volatile long nacksSent;
+    public volatile long pliSent;
     public volatile long lastReceiverReportAtMs;
+    public volatile long lastPliSentAtMs;
     public TrackFeedbackState(RTCRtpTransceiver transceiver, String trackId, NackGenerator nackGenerator) {
         this.transceiver = transceiver;
         this.trackId = trackId;

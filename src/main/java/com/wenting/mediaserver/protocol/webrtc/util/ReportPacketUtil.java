@@ -56,6 +56,16 @@ public class ReportPacketUtil {
         return packet;
     }
 
+    public static byte[] encodePictureLossIndicationPacket(long senderSsrc, long mediaSsrc) {
+        byte[] packet = new byte[12];
+        packet[0] = (byte) 0x81;
+        packet[1] = (byte) 206;
+        writeUnsignedShort(packet, 2, 2);
+        writeUnsignedInt(packet, 4, senderSsrc & 0xFFFFFFFFL);
+        writeUnsignedInt(packet, 8, mediaSsrc & 0xFFFFFFFFL);
+        return packet;
+    }
+
     private static List<NackChunk> buildNackChunks(List<Integer> lostSequenceNumbers) {
         if (lostSequenceNumbers == null || lostSequenceNumbers.isEmpty()) {
             return Collections.emptyList();
