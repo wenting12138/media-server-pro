@@ -62,6 +62,7 @@ public final class DefaultPublishedStream implements IPublishedStream {
     private final Map<String, SubscriberPlaybackState> playbackStatesBySessionId = new ConcurrentHashMap<String, SubscriberPlaybackState>();
     private volatile OrderedRtpPacketObserver orderedRtpPacketObserver;
     private volatile KeyFrameRequestHandler keyFrameRequestHandler;
+    private volatile SubscriberCountObserver subscriberCountObserver;
 
 
     public DefaultPublishedStream(StreamKey key) {
@@ -89,6 +90,7 @@ public final class DefaultPublishedStream implements IPublishedStream {
         }
         log.info("Subscriber added stream={} subscriber={} totalSubscribers={}",
                 key, subscriberSession.sessionId(), subscribersBySessionId.size());
+        notifySubscriberCountChanged();
     }
 
     @Override
@@ -105,6 +107,7 @@ public final class DefaultPublishedStream implements IPublishedStream {
         if (removed != null) {
             log.info("Subscriber removed stream={} subscriber={} totalSubscribers={}",
                     key, sessionId, subscribersBySessionId.size());
+            notifySubscriberCountChanged();
         }
         return removed;
     }
@@ -121,6 +124,10 @@ public final class DefaultPublishedStream implements IPublishedStream {
         this.keyFrameRequestHandler = keyFrameRequestHandler;
     }
 
+    public void setSubscriberCountObserver(SubscriberCountObserver subscriberCountObserver) {
+        this.subscriberCountObserver = subscriberCountObserver;
+    }
+
     @Override
     public boolean requestKeyFrame(String trackId) {
         KeyFrameRequestHandler handler = keyFrameRequestHandler;
@@ -131,6 +138,16 @@ public final class DefaultPublishedStream implements IPublishedStream {
     public Long latestTrackSsrc(String trackId) {
         PublishedTrackContext context = publishedTrackContext(trackId);
         return context == null ? null : context.latestSsrc();
+    }
+
+    @Override
+    public String firstVideoTrackId() {
+        for (PublishedTrackContext trackContext : trackContextsByTrackId.values()) {
+            if (trackContext != null && trackContext.isVideoTrack()) {
+                return trackContext.trackId();
+            }
+        }
+        return null;
     }
 
     @Override
@@ -582,6 +599,13 @@ public final class DefaultPublishedStream implements IPublishedStream {
                 && keyFrame != configFrame
                 && subscriber.acceptsTrack(keyFrame.trackId())) {
             subscriber.writeInboundFrame(keyFrame);
+        }
+    }
+
+    private void notifySubscriberCountChanged() {
+        SubscriberCountObserver observer = subscriberCountObserver;
+        if (observer != null) {
+            observer.onSubscriberCountChanged(subscribersBySessionId.size());
         }
     }
 

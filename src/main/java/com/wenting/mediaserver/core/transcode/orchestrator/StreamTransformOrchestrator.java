@@ -22,6 +22,9 @@ public interface StreamTransformOrchestrator extends AutoCloseable {
         return false;
     }
 
+    default void setPlaybackActive(StreamKey sourceKey, boolean active) {
+    }
+
     @Override
     void close();
 }

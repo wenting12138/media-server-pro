@@ -34,9 +34,12 @@ final class TranscodeWorker implements Runnable {
     private final AtomicBoolean running = new AtomicBoolean(true);
     private final AtomicLong backlogTrimCount = new AtomicLong(0);
     private final Thread thread;
+    private final AtomicBoolean playbackActive = new AtomicBoolean(false);
     private volatile TransformDecision transformDecision = TransformDecision.PENDING;
     private volatile VideoFrameTranscoder transcoder;
     private final AtomicBoolean keyFrameRequestPending = new AtomicBoolean(false);
+    private volatile CanonicalVideoFrame latestStartupConfigFrame;
+    private volatile CanonicalVideoFrame latestStartupKeyFrame;
 
     private TranscodeWorker(
             StreamKey sourceKey,
@@ -107,12 +110,31 @@ final class TranscodeWorker implements Runnable {
         return accepted || transformDecision != TransformDecision.PASSTHROUGH;
     }
 
+    void setPlaybackActive(boolean active) {
+        boolean changed = playbackActive.getAndSet(active) != active;
+        if (!changed) {
+            return;
+        }
+        if (!active) {
+            queue.clear();
+            closeTranscoder();
+            log.info("Suspended stream transform worker source={} derived={}", sourceKey, derivedKey);
+            return;
+        }
+        seedStartupCache();
+        log.info("Activated stream transform worker source={} derived={}", sourceKey, derivedKey);
+    }
+
     void enqueueFrame(InboundMediaFrame frame) {
         if (!running.get() || frame == null) {
             return;
         }
         CanonicalVideoFrame canonicalFrame = canonicalizer.canonicalize(frame);
         if (canonicalFrame == null) {
+            return;
+        }
+        rememberStartupFrame(canonicalFrame);
+        if (!playbackActive.get()) {
             return;
         }
         enqueueCanonical(canonicalFrame);
@@ -123,6 +145,10 @@ final class TranscodeWorker implements Runnable {
             return;
         }
         for (CanonicalVideoFrame canonicalFrame : canonicalizer.canonicalize(packet, track)) {
+            rememberStartupFrame(canonicalFrame);
+            if (!playbackActive.get()) {
+                continue;
+            }
             enqueueCanonical(canonicalFrame);
         }
     }
@@ -133,6 +159,36 @@ final class TranscodeWorker implements Runnable {
         }
         if (!queue.offer(canonicalFrame)) {
             trimBacklogForRealtime(canonicalFrame);
+        }
+    }
+
+    private void rememberStartupFrame(CanonicalVideoFrame frame) {
+        if (frame == null) {
+            return;
+        }
+        if (frame.configFrame()) {
+            latestStartupConfigFrame = frame;
+        }
+        if (frame.keyFrame() && !frame.configFrame()) {
+            latestStartupKeyFrame = frame;
+        }
+    }
+
+    private void seedStartupCache() {
+        CanonicalVideoFrame configFrame = latestStartupConfigFrame;
+        CanonicalVideoFrame keyFrame = latestStartupKeyFrame;
+        int seeded = 0;
+        if (configFrame != null) {
+            queue.offer(configFrame);
+            seeded++;
+        }
+        if (keyFrame != null && keyFrame != configFrame) {
+            queue.offer(keyFrame);
+            seeded++;
+        }
+        if (seeded > 0) {
+            log.info("Seeded video startup cache source={} derived={} seededFrames={} hasConfig={} hasKeyFrame={}",
+                    sourceKey, derivedKey, seeded, configFrame != null, keyFrame != null);
         }
     }
 

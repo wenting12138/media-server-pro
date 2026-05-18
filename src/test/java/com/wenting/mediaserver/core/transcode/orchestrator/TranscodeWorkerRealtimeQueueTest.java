@@ -38,6 +38,7 @@ final class TranscodeWorkerRealtimeQueueTest {
                 3
         );
         try {
+            worker.setPlaybackActive(true);
             worker.enqueueFrame(frame(0, true, true));
             worker.enqueueFrame(frame(1, true, false));
             for (int i = 2; i <= 10; i++) {
@@ -50,6 +51,61 @@ final class TranscodeWorkerRealtimeQueueTest {
             Assertions.assertFalse(outputs.isEmpty());
             Assertions.assertTrue(outputs.size() < 11, "expected aggressive backlog trimming");
             Assertions.assertTrue(containsPayload(outputs, (byte) 10), "latest frame should survive trimming");
+        } finally {
+            worker.stop();
+        }
+    }
+
+    @Test
+    void shouldNotPublishWhenPlaybackIsInactive() throws Exception {
+        StreamKey sourceKey = new StreamKey(StreamProtocol.RTMP, "live", "camera");
+        StreamKey derivedKey = new StreamKey(StreamProtocol.RTMP, "live", "camera__webrtc");
+        CollectingPublisher publisher = new CollectingPublisher();
+        TranscodeWorker worker = TranscodeWorker.start(
+                sourceKey,
+                derivedKey,
+                publisher,
+                new IdentityCanonicalizer(),
+                new SlowPassthroughTranscoderFactory(),
+                new AlwaysTranscodeDecisionPolicy(),
+                3
+        );
+        try {
+            worker.enqueueFrame(frame(0, true, true));
+            worker.enqueueFrame(frame(1, true, false));
+            Thread.sleep(300L);
+            Assertions.assertTrue(publisher.frames().isEmpty());
+        } finally {
+            worker.stop();
+        }
+    }
+
+    @Test
+    void shouldSeedStartupCacheWhenPlaybackBecomesActive() throws Exception {
+        StreamKey sourceKey = new StreamKey(StreamProtocol.RTMP, "live", "camera");
+        StreamKey derivedKey = new StreamKey(StreamProtocol.RTMP, "live", "camera__webrtc");
+        CollectingPublisher publisher = new CollectingPublisher();
+        TranscodeWorker worker = TranscodeWorker.start(
+                sourceKey,
+                derivedKey,
+                publisher,
+                new IdentityCanonicalizer(),
+                new SlowPassthroughTranscoderFactory(),
+                new AlwaysPassthroughDecisionPolicy(),
+                3
+        );
+        try {
+            worker.enqueueFrame(frame(0, true, true));
+            worker.enqueueFrame(frame(1, true, false));
+            Thread.sleep(200L);
+            Assertions.assertTrue(publisher.frames().isEmpty());
+
+            worker.setPlaybackActive(true);
+            waitForLastPayload(publisher.frames(), (byte) 1, 5000L);
+
+            List<InboundMediaFrame> outputs = publisher.frames();
+            Assertions.assertTrue(containsPayload(outputs, (byte) 0));
+            Assertions.assertTrue(containsPayload(outputs, (byte) 1));
         } finally {
             worker.stop();
         }
@@ -163,6 +219,14 @@ final class TranscodeWorkerRealtimeQueueTest {
         @Override
         public TransformDecision decide(StreamKey sourceKey, CanonicalVideoFrame frame, TransformDecision currentDecision) {
             return TransformDecision.TRANSCODE;
+        }
+    }
+
+    private static final class AlwaysPassthroughDecisionPolicy implements TranscodeDecisionPolicy {
+
+        @Override
+        public TransformDecision decide(StreamKey sourceKey, CanonicalVideoFrame frame, TransformDecision currentDecision) {
+            return TransformDecision.PASSTHROUGH;
         }
     }
 }

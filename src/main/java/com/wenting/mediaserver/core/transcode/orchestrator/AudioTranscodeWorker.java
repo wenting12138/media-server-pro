@@ -34,8 +34,11 @@ final class AudioTranscodeWorker implements Runnable {
     private final AtomicBoolean running = new AtomicBoolean(true);
     private final AtomicLong backlogTrimCount = new AtomicLong(0);
     private final Thread thread;
+    private final AtomicBoolean playbackActive = new AtomicBoolean(false);
     private volatile TransformDecision transformDecision = TransformDecision.PENDING;
     private volatile AudioFrameTranscoder transcoder;
+    private volatile CanonicalAudioFrame latestStartupConfigFrame;
+    private volatile CanonicalAudioFrame latestStartupMediaFrame;
 
     private AudioTranscodeWorker(
             StreamKey sourceKey,
@@ -103,6 +106,10 @@ final class AudioTranscodeWorker implements Runnable {
         }
         CanonicalAudioFrame canonicalFrame = canonicalizer.canonicalize(frame);
         if (canonicalFrame != null) {
+            rememberStartupFrame(canonicalFrame);
+            if (!playbackActive.get()) {
+                return;
+            }
             enqueueCanonical(canonicalFrame);
         }
     }
@@ -112,7 +119,55 @@ final class AudioTranscodeWorker implements Runnable {
             return;
         }
         for (CanonicalAudioFrame canonicalFrame : canonicalizer.canonicalize(packet, track)) {
+            rememberStartupFrame(canonicalFrame);
+            if (!playbackActive.get()) {
+                continue;
+            }
             enqueueCanonical(canonicalFrame);
+        }
+    }
+
+    void setPlaybackActive(boolean active) {
+        boolean changed = playbackActive.getAndSet(active) != active;
+        if (!changed) {
+            return;
+        }
+        if (!active) {
+            queue.clear();
+            closeTranscoder();
+            log.info("Suspended audio transform worker source={} derived={}", sourceKey, derivedKey);
+            return;
+        }
+        seedStartupCache();
+        log.info("Activated audio transform worker source={} derived={}", sourceKey, derivedKey);
+    }
+
+    private void rememberStartupFrame(CanonicalAudioFrame frame) {
+        if (frame == null) {
+            return;
+        }
+        if (frame.configFrame()) {
+            latestStartupConfigFrame = frame;
+        } else {
+            latestStartupMediaFrame = frame;
+        }
+    }
+
+    private void seedStartupCache() {
+        CanonicalAudioFrame configFrame = latestStartupConfigFrame;
+        CanonicalAudioFrame mediaFrame = latestStartupMediaFrame;
+        int seeded = 0;
+        if (configFrame != null) {
+            queue.offer(configFrame);
+            seeded++;
+        }
+        if (mediaFrame != null && mediaFrame != configFrame) {
+            queue.offer(mediaFrame);
+            seeded++;
+        }
+        if (seeded > 0) {
+            log.info("Seeded audio startup cache source={} derived={} seededFrames={} hasConfig={} hasMedia={}",
+                    sourceKey, derivedKey, seeded, configFrame != null, mediaFrame != null);
         }
     }
 

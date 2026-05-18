@@ -187,6 +187,21 @@ public final class WebRtcPlaybackStreamTransformOrchestrator implements StreamTr
         return accepted;
     }
 
+    @Override
+    public void setPlaybackActive(StreamKey sourceKey, boolean active) {
+        if (sourceKey == null || isDerivedStream(sourceKey)) {
+            return;
+        }
+        TranscodeWorker videoWorker = ensureVideoWorker(sourceKey);
+        if (videoWorker != null) {
+            videoWorker.setPlaybackActive(active);
+        }
+        AudioTranscodeWorker audioWorker = ensureAudioWorker(sourceKey);
+        if (audioWorker != null) {
+            audioWorker.setPlaybackActive(active);
+        }
+    }
+
     private TranscodeWorker ensureVideoWorker(StreamKey sourceKey) {
         if (sourceKey == null || isDerivedStream(sourceKey)) {
             return null;

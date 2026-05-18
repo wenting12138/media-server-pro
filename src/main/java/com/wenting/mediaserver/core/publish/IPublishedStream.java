@@ -28,6 +28,10 @@ public interface IPublishedStream {
         return null;
     }
 
+    default String firstVideoTrackId() {
+        return null;
+    }
+
     default String sdpDescription(StreamKey requestStreamKey) {
         return null;
     }

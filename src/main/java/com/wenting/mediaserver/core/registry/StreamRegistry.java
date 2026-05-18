@@ -223,6 +223,23 @@ public final class StreamRegistry {
                             }
                         }
         );
+        publishedStream.setSubscriberCountObserver(
+                manager == null || !isDerivedPlaybackStream(key)
+                        ? null
+                        : new com.wenting.mediaserver.core.publish.SubscriberCountObserver() {
+                            @Override
+                            public void onSubscriberCountChanged(int subscriberCount) {
+                                StreamKey sourceKey = sourceKeyForDerived(key);
+                                manager.setPlaybackActive(sourceKey, subscriberCount > 0);
+                                if (subscriberCount == 1) {
+                                    String trackId = resolvePrimaryVideoTrackId(sourceKey);
+                                    if (trackId != null) {
+                                        manager.requestKeyFrame(sourceKey, trackId);
+                                    }
+                                }
+                            }
+                        }
+        );
     }
 
     private boolean isDerivedPlaybackStream(StreamKey key) {
@@ -251,5 +268,10 @@ public final class StreamRegistry {
 
     public RtmpSessionManager getRtmpSessionManager() {
         return rtmpSessionManager;
+    }
+
+    private String resolvePrimaryVideoTrackId(StreamKey sourceKey) {
+        IPublishedStream sourceStream = findPublishedStream(sourceKey);
+        return sourceStream == null ? null : sourceStream.firstVideoTrackId();
     }
 }

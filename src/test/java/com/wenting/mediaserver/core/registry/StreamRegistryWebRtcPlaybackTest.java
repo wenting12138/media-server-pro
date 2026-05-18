@@ -4,6 +4,10 @@ import com.wenting.mediaserver.core.enums.StreamProtocol;
 import com.wenting.mediaserver.core.model.StreamKey;
 import com.wenting.mediaserver.core.publish.DefaultPublishedStream;
 import com.wenting.mediaserver.core.publish.IPublishedStream;
+import com.wenting.mediaserver.core.publish.InboundMediaFrame;
+import com.wenting.mediaserver.core.publish.MediaSubscriberAdapter;
+import com.wenting.mediaserver.core.enums.publish.CodecType;
+import com.wenting.mediaserver.core.enums.publish.TrackType;
 import com.wenting.mediaserver.core.transcode.orchestrator.StreamTransformOrchestrator;
 import com.wenting.mediaserver.core.transcode.orchestrator.WebRtcPlaybackStreamTransformOrchestrator;
 import org.junit.jupiter.api.Assertions;
@@ -73,5 +77,89 @@ final class StreamRegistryWebRtcPlaybackTest {
         Assertions.assertTrue(derived.requestKeyFrame("video-main"));
         Assertions.assertEquals(sourceKey, requestedSourceKey[0]);
         Assertions.assertEquals("video-main", requestedTrackId[0]);
+    }
+
+    @Test
+    void derivedPlaybackSubscriberTransitionShouldActivateSourcePlaybackAndRequestKeyframe() {
+        StreamRegistry registry = new StreamRegistry();
+        final StreamKey[] activatedSourceKey = new StreamKey[2];
+        final boolean[] activationState = new boolean[2];
+        final String[] requestedTrackId = new String[1];
+        final int[] activationCallCount = new int[1];
+        registry.setStreamTransformOrchestrator(new StreamTransformOrchestrator() {
+            @Override
+            public void onStreamRegistered(StreamKey sourceKey) {
+            }
+
+            @Override
+            public void onStreamRemoved(StreamKey sourceKey) {
+            }
+
+            @Override
+            public void onFrame(InboundMediaFrame frame) {
+            }
+
+            @Override
+            public boolean requestKeyFrame(StreamKey sourceKey, String trackId) {
+                requestedTrackId[0] = trackId;
+                return true;
+            }
+
+            @Override
+            public void setPlaybackActive(StreamKey sourceKey, boolean active) {
+                int index = activationCallCount[0]++;
+                activatedSourceKey[index] = sourceKey;
+                activationState[index] = active;
+            }
+
+            @Override
+            public void close() {
+            }
+        });
+
+        StreamKey sourceKey = new StreamKey(StreamProtocol.RTMP, "live", "camera");
+        DefaultPublishedStream sourceStream = new DefaultPublishedStream(sourceKey);
+        sourceStream.onInboundFrame(new InboundMediaFrame(
+                StreamProtocol.RTMP,
+                TrackType.VIDEO,
+                CodecType.H264,
+                "source-session",
+                sourceKey,
+                "video-main",
+                Long.valueOf(0L),
+                Long.valueOf(0L),
+                true,
+                true,
+                null,
+                new byte[]{0x01}
+        ));
+        registry.registerPublishedStream(sourceKey, sourceStream);
+        StreamKey derivedKey = new StreamKey(StreamProtocol.RTMP, "live", "camera__webrtc");
+        DefaultPublishedStream derivedStream = new DefaultPublishedStream(derivedKey);
+        registry.registerPublishedStream(derivedKey, derivedStream);
+
+        MediaSubscriberAdapter subscriber = new MediaSubscriberAdapter() {
+            @Override
+            public String sessionId() {
+                return "sub-1";
+            }
+
+            @Override
+            public boolean acceptsTrack(String trackId) {
+                return true;
+            }
+
+            @Override
+            public void writeMediaPacket(com.wenting.mediaserver.core.publish.InboundRtpPacket packet) {
+            }
+        };
+        derivedStream.addSubscriber(subscriber);
+        derivedStream.removeSubscriber("sub-1");
+
+        Assertions.assertEquals(sourceKey, activatedSourceKey[0]);
+        Assertions.assertTrue(activationState[0]);
+        Assertions.assertEquals("video-main", requestedTrackId[0]);
+        Assertions.assertEquals(sourceKey, activatedSourceKey[1]);
+        Assertions.assertFalse(activationState[1]);
     }
 }
