@@ -37,4 +37,20 @@ public interface ITrack {
     default byte[] h265Pps() {
         return null;
     }
+
+    default byte[] aacAudioSpecificConfig() {
+        return null;
+    }
+
+    default int aacSizeLength() {
+        return 13;
+    }
+
+    default int aacIndexLength() {
+        return 3;
+    }
+
+    default int aacIndexDeltaLength() {
+        return 3;
+    }
 }

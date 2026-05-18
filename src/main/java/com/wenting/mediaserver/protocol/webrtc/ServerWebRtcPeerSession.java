@@ -21,7 +21,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.net.InetSocketAddress;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -47,7 +46,6 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
     private final MediaSubscriberAdapter subscriberAdapter;
     private final RtspFrameToRtpPacketizer frameToRtpPacketizer = new RtspFrameToRtpPacketizer();
     private final Map<String, InboundMediaFrame> latestConfigFramesByTrackId = new ConcurrentHashMap<String, InboundMediaFrame>();
-    private final Map<String, AacToG711Transcoder> audioTranscodersByTrackId = new ConcurrentHashMap<String, AacToG711Transcoder>();
     private final Map<String, RtpSendTrackState> rtpSendStatesByTrackId = new ConcurrentHashMap<String, RtpSendTrackState>();
     private final Map<String, Boolean> startedTracksByTrackId = new ConcurrentHashMap<String, Boolean>();
     private final Map<String, Boolean> firstSrtpPacketLoggedByTrackId = new ConcurrentHashMap<String, Boolean>();
@@ -173,22 +171,6 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
         if (negotiatedCodec == CodecType.G711A || negotiatedCodec == CodecType.G711U) {
             if (frame.codecType() == negotiatedCodec) {
                 sendFrame(frame, frame);
-                return;
-            }
-            if (frame.codecType() == CodecType.AAC || frame.codecType() == CodecType.MPEG4_GENERIC) {
-                InboundMediaFrame configFrame = latestConfigFramesByTrackId.get(trackId);
-                if (configFrame == null) {
-                    logDropOnce(trackId, "wait-aac-config",
-                            "WebRTC audio waiting AAC config frame session={} stream={} track={}",
-                            sessionId, streamKey, trackId);
-                    return;
-                }
-                AacToG711Transcoder transcoder = audioTranscoder(trackId, negotiatedCodec);
-                List<InboundMediaFrame> outputs = new ArrayList<InboundMediaFrame>(transcoder.transcode(configFrame));
-                outputs.addAll(transcoder.transcode(frame));
-                for (InboundMediaFrame output : outputs) {
-                    sendFrame(output, output);
-                }
                 return;
             }
         }
@@ -389,21 +371,6 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
         return transceiver.getNegotiatedCodecType();
     }
 
-    private AacToG711Transcoder audioTranscoder(String trackId, CodecType negotiatedCodec) {
-        String key = normalizeTrackId(trackId) + "|" + negotiatedCodec.name();
-        AacToG711Transcoder transcoder = audioTranscodersByTrackId.get(key);
-        if (transcoder != null) {
-            return transcoder;
-        }
-        AacToG711Transcoder created = new AacToG711Transcoder(negotiatedCodec);
-        AacToG711Transcoder existing = audioTranscodersByTrackId.putIfAbsent(key, created);
-        if (existing != null) {
-            created.close();
-            return existing;
-        }
-        return created;
-    }
-
     private int resolvePayloadType(RTCRtpTransceiver transceiver, CodecType codecType) {
         if (transceiver != null && transceiver.getNegotiatedPayloadType() != null) {
             return transceiver.getNegotiatedPayloadType().intValue();
@@ -438,12 +405,6 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
         if (stream != null) {
             stream.removeSubscriber(sessionId);
         }
-        for (AacToG711Transcoder transcoder : audioTranscodersByTrackId.values()) {
-            if (transcoder != null) {
-                transcoder.close();
-            }
-        }
-        audioTranscodersByTrackId.clear();
         peerConnection.close();
         datagramIo.close();
     }

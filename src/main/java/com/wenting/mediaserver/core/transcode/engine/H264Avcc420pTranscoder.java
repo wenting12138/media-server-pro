@@ -325,13 +325,7 @@ public final class H264Avcc420pTranscoder implements VideoFrameTranscoder {
         encCtx.gop_size(25);
         encCtx.max_b_frames(0);
         AVDictionary dict = new AVDictionary();
-        av_dict_set(dict, "preset", "ultrafast", 0);
-        av_dict_set(dict, "tune", "zerolatency", 0);
-        av_dict_set(dict, "profile", "baseline", 0);
-        av_dict_set(dict, "level", "3.1", 0);
-        av_dict_set(dict, "x264-params",
-                "annexb=1:repeat-headers=1:aud=0:scenecut=0:keyint=25:min-keyint=25:bframes=0:cabac=0:ref=1:weightp=0:8x8dct=0",
-                0);
+        configureEncoderOptions(codec, dict);
         int rc = avcodec_open2(encCtx, codec, dict);
         av_dict_free(dict);
         if (rc < 0) {
@@ -366,6 +360,30 @@ public final class H264Avcc420pTranscoder implements VideoFrameTranscoder {
             }
         }
         return AV_PIX_FMT_YUV420P;
+    }
+
+    private void configureEncoderOptions(AVCodec codec, AVDictionary dict) {
+        if (codec == null || dict == null) {
+            return;
+        }
+        String codecName = codec.name() == null ? "" : codec.name().getString();
+        if ("libx264".equalsIgnoreCase(codecName)) {
+            av_dict_set(dict, "preset", "ultrafast", 0);
+            av_dict_set(dict, "tune", "zerolatency", 0);
+            av_dict_set(dict, "profile", "baseline", 0);
+            av_dict_set(dict, "level", "3.1", 0);
+            av_dict_set(dict, "x264-params",
+                    "annexb=1:repeat-headers=1:aud=0:scenecut=0:keyint=25:min-keyint=25:bframes=0:cabac=0:ref=1:weightp=0:8x8dct=0",
+                    0);
+            return;
+        }
+        if ("libopenh264".equalsIgnoreCase(codecName)) {
+            av_dict_set(dict, "coder", "0", 0);
+            av_dict_set(dict, "bf", "0", 0);
+            av_dict_set(dict, "g", "25", 0);
+            return;
+        }
+        av_dict_set(dict, "g", "25", 0);
     }
 
     private AVFrame prepareFrameForEncode(AVFrame src) {

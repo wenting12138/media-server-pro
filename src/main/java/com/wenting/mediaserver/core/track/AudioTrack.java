@@ -12,12 +12,31 @@ public class AudioTrack implements ITrack {
     private final int sampleRate;
     private final int channels;
     private final int bitrate;
+    private final byte[] aacAudioSpecificConfig;
+    private final int aacSizeLength;
+    private final int aacIndexLength;
+    private final int aacIndexDeltaLength;
 
     public AudioTrack() {
-        this("", CodecType.UNKNOWN, null, 0, 0, 0);
+        this("", CodecType.UNKNOWN, null, 0, 0, 0, null, 13, 3, 3);
     }
 
     public AudioTrack(String trackId, CodecType codecType, String connectionAddress, int sampleRate, int channels, int bitrate) {
+        this(trackId, codecType, connectionAddress, sampleRate, channels, bitrate, null, 13, 3, 3);
+    }
+
+    public AudioTrack(
+            String trackId,
+            CodecType codecType,
+            String connectionAddress,
+            int sampleRate,
+            int channels,
+            int bitrate,
+            byte[] aacAudioSpecificConfig,
+            int aacSizeLength,
+            int aacIndexLength,
+            int aacIndexDeltaLength
+    ) {
         this.trackId = trackId == null ? "" : trackId;
         this.codecType = codecType == null ? CodecType.UNKNOWN : codecType;
         this.trackType = TrackType.AUDIO;
@@ -25,6 +44,10 @@ public class AudioTrack implements ITrack {
         this.sampleRate = sampleRate;
         this.channels = channels;
         this.bitrate = bitrate;
+        this.aacAudioSpecificConfig = aacAudioSpecificConfig == null ? null : java.util.Arrays.copyOf(aacAudioSpecificConfig, aacAudioSpecificConfig.length);
+        this.aacSizeLength = aacSizeLength > 0 ? aacSizeLength : 13;
+        this.aacIndexLength = Math.max(aacIndexLength, 0);
+        this.aacIndexDeltaLength = Math.max(aacIndexDeltaLength, 0);
     }
 
     @Override
@@ -62,5 +85,25 @@ public class AudioTrack implements ITrack {
 
     public int bitrate() {
         return bitrate;
+    }
+
+    @Override
+    public byte[] aacAudioSpecificConfig() {
+        return aacAudioSpecificConfig == null ? null : java.util.Arrays.copyOf(aacAudioSpecificConfig, aacAudioSpecificConfig.length);
+    }
+
+    @Override
+    public int aacSizeLength() {
+        return aacSizeLength;
+    }
+
+    @Override
+    public int aacIndexLength() {
+        return aacIndexLength;
+    }
+
+    @Override
+    public int aacIndexDeltaLength() {
+        return aacIndexDeltaLength;
     }
 }

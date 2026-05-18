@@ -1359,15 +1359,7 @@ public class RTCPeerConnection implements AutoCloseable {
 
     private Integer answerPayloadType(MediaDescription offeredMedia, MediaStreamTrack.Kind kind) {
         if (kind == MediaStreamTrack.Kind.AUDIO) {
-            Integer matched = findPayloadTypeByCodec(offeredMedia, "pcmu/");
-            if (matched != null) {
-                return matched;
-            }
-            matched = findPayloadTypeByCodec(offeredMedia, "pcma/");
-            if (matched != null) {
-                return matched;
-            }
-            return null;
+            return findPayloadTypeByCodec(offeredMedia, "pcmu/");
         }
         Integer matched = findPayloadTypeByCodec(offeredMedia, "h264/");
         if (matched != null) {

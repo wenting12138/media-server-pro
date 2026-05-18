@@ -1,7 +1,10 @@
-package com.wenting.mediaserver.protocol.webrtc;
+package com.wenting.mediaserver.core.transcode.engine;
 
 import com.wenting.mediaserver.core.enums.publish.CodecType;
+import com.wenting.mediaserver.core.enums.publish.TrackType;
+import com.wenting.mediaserver.core.model.StreamKey;
 import com.wenting.mediaserver.core.publish.InboundMediaFrame;
+import com.wenting.mediaserver.core.transcode.canonical.CanonicalAudioFrame;
 import org.bytedeco.ffmpeg.avcodec.AVCodec;
 import org.bytedeco.ffmpeg.avcodec.AVCodecContext;
 import org.bytedeco.ffmpeg.avcodec.AVPacket;
@@ -52,13 +55,12 @@ import static org.bytedeco.ffmpeg.global.swresample.swr_free;
 import static org.bytedeco.ffmpeg.global.swresample.swr_get_delay;
 import static org.bytedeco.ffmpeg.global.swresample.swr_init;
 
-final class AacToG711Transcoder implements AutoCloseable {
+public final class AudioToG711UTranscoder implements AudioFrameTranscoder {
 
     private static final int TARGET_SAMPLE_RATE = 8000;
     private static final int TARGET_CHANNELS = 1;
 
-    private final CodecType targetCodecType;
-
+    private CodecType currentSourceCodecType = CodecType.UNKNOWN;
     private AVCodecContext decCtx;
     private AVCodecContext encCtx;
     private AVPacket decPkt;
@@ -71,25 +73,29 @@ final class AacToG711Transcoder implements AutoCloseable {
     private boolean decoderReady;
     private boolean encoderReady;
 
-    AacToG711Transcoder(CodecType targetCodecType) {
-        this.targetCodecType = targetCodecType == CodecType.G711A ? CodecType.G711A : CodecType.G711U;
-    }
-
-    List<InboundMediaFrame> transcode(InboundMediaFrame sourceFrame) {
-        if (sourceFrame == null || sourceFrame.trackType() != com.wenting.mediaserver.core.enums.publish.TrackType.AUDIO) {
+    @Override
+    public List<InboundMediaFrame> transcode(CanonicalAudioFrame frame, StreamKey derivedKey) {
+        if (frame == null || frame.sourceFrame() == null) {
             return Collections.emptyList();
         }
-        if (sourceFrame.configFrame()) {
-            applyAudioSpecificConfig(sourceFrame.payload());
+        CodecType sourceCodecType = frame.codecType();
+        if (sourceCodecType == CodecType.G711U) {
+            return Collections.singletonList(copyAsDerivedFrame(frame.sourceFrame(), derivedKey, CodecType.G711U, "audio-g711u", frame.payload(), false));
+        }
+        if (frame.configFrame()) {
+            if (sourceCodecType == CodecType.AAC || sourceCodecType == CodecType.MPEG4_GENERIC) {
+                applyAudioSpecificConfig(frame.payload());
+            }
+            currentSourceCodecType = sourceCodecType;
             return Collections.emptyList();
         }
-        if (!ensureDecoder() || !ensureEncoder()) {
+        if (!ensureDecoder(sourceCodecType) || !ensureEncoder()) {
             return Collections.emptyList();
         }
-        if (!decodePacket(sourceFrame.payload(), sourceFrame.ptsMillis(), sourceFrame.dtsMillis())) {
+        if (!decodePacket(frame.payload(), frame.sourceFrame().ptsMillis(), frame.sourceFrame().dtsMillis())) {
             return Collections.emptyList();
         }
-        return drainDecodedFrames(sourceFrame);
+        return drainDecodedFrames(frame.sourceFrame(), derivedKey);
     }
 
     private void applyAudioSpecificConfig(byte[] configBytes) {
@@ -103,14 +109,23 @@ final class AacToG711Transcoder implements AutoCloseable {
         resetDecoder();
     }
 
-    private boolean ensureDecoder() {
+    private boolean ensureDecoder(CodecType sourceCodecType) {
+        if (sourceCodecType != currentSourceCodecType) {
+            currentSourceCodecType = sourceCodecType;
+            resetDecoder();
+        }
         if (decoderReady) {
             return true;
         }
-        if (audioSpecificConfig == null || audioSpecificConfig.length == 0) {
+        int codecId = sourceCodecId(sourceCodecType);
+        if (codecId == 0) {
             return false;
         }
-        AVCodec codec = avcodec_find_decoder(AV_CODEC_ID_AAC);
+        if ((sourceCodecType == CodecType.AAC || sourceCodecType == CodecType.MPEG4_GENERIC)
+                && (audioSpecificConfig == null || audioSpecificConfig.length == 0)) {
+            return false;
+        }
+        AVCodec codec = avcodec_find_decoder(codecId);
         if (codec == null) {
             return false;
         }
@@ -120,10 +135,12 @@ final class AacToG711Transcoder implements AutoCloseable {
         if (decCtx == null || decPkt == null || decFrame == null) {
             return false;
         }
-        BytePointer extradata = new BytePointer(av_mallocz(audioSpecificConfig.length + AV_INPUT_BUFFER_PADDING_SIZE));
-        extradata.position(0).put(audioSpecificConfig, 0, audioSpecificConfig.length);
-        decCtx.extradata(extradata);
-        decCtx.extradata_size(audioSpecificConfig.length);
+        if (sourceCodecType == CodecType.AAC || sourceCodecType == CodecType.MPEG4_GENERIC) {
+            BytePointer extradata = new BytePointer(av_mallocz(audioSpecificConfig.length + AV_INPUT_BUFFER_PADDING_SIZE));
+            extradata.position(0).put(audioSpecificConfig, 0, audioSpecificConfig.length);
+            decCtx.extradata(extradata);
+            decCtx.extradata_size(audioSpecificConfig.length);
+        }
         if (avcodec_open2(decCtx, codec, (org.bytedeco.ffmpeg.avutil.AVDictionary) null) < 0) {
             return false;
         }
@@ -135,8 +152,7 @@ final class AacToG711Transcoder implements AutoCloseable {
         if (encoderReady) {
             return true;
         }
-        int codecId = targetCodecType == CodecType.G711A ? AV_CODEC_ID_PCM_ALAW : AV_CODEC_ID_PCM_MULAW;
-        AVCodec codec = avcodec_find_encoder(codecId);
+        AVCodec codec = avcodec_find_encoder(AV_CODEC_ID_PCM_MULAW);
         if (codec == null) {
             return false;
         }
@@ -159,12 +175,25 @@ final class AacToG711Transcoder implements AutoCloseable {
         return true;
     }
 
-    private boolean decodePacket(byte[] aacPayload, Long ptsMillis, Long dtsMillis) {
+    private int sourceCodecId(CodecType sourceCodecType) {
+        if (sourceCodecType == CodecType.AAC || sourceCodecType == CodecType.MPEG4_GENERIC) {
+            return AV_CODEC_ID_AAC;
+        }
+        if (sourceCodecType == CodecType.G711A) {
+            return AV_CODEC_ID_PCM_ALAW;
+        }
+        if (sourceCodecType == CodecType.G711U) {
+            return AV_CODEC_ID_PCM_MULAW;
+        }
+        return 0;
+    }
+
+    private boolean decodePacket(byte[] payload, Long ptsMillis, Long dtsMillis) {
         av_packet_unref(decPkt);
-        if (av_new_packet(decPkt, aacPayload.length) < 0) {
+        if (av_new_packet(decPkt, payload.length) < 0) {
             return false;
         }
-        decPkt.data().position(0).put(aacPayload, 0, aacPayload.length);
+        decPkt.data().position(0).put(payload, 0, payload.length);
         long pts = ptsMillis == null ? 0L : ptsMillis.longValue();
         long dts = dtsMillis == null ? pts : dtsMillis.longValue();
         decPkt.pts(pts);
@@ -174,7 +203,7 @@ final class AacToG711Transcoder implements AutoCloseable {
         return rc >= 0;
     }
 
-    private List<InboundMediaFrame> drainDecodedFrames(InboundMediaFrame sourceFrame) {
+    private List<InboundMediaFrame> drainDecodedFrames(InboundMediaFrame sourceFrame, StreamKey derivedKey) {
         List<InboundMediaFrame> outputs = new ArrayList<InboundMediaFrame>(2);
         int rc;
         while ((rc = avcodec_receive_frame(decCtx, decFrame)) >= 0) {
@@ -189,20 +218,7 @@ final class AacToG711Transcoder implements AutoCloseable {
             while ((rc = avcodec_receive_packet(encCtx, encPkt)) >= 0) {
                 byte[] payload = new byte[encPkt.size()];
                 encPkt.data().position(0).get(payload);
-                outputs.add(new InboundMediaFrame(
-                        sourceFrame.sourceProtocol(),
-                        sourceFrame.trackType(),
-                        targetCodecType,
-                        sourceFrame.sessionId(),
-                        sourceFrame.streamKey(),
-                        targetCodecType == CodecType.G711A ? "audio-g711a" : "audio-g711u",
-                        sourceFrame.ptsMillis(),
-                        sourceFrame.dtsMillis(),
-                        false,
-                        false,
-                        sourceFrame.remoteAddress(),
-                        payload
-                ));
+                outputs.add(copyAsDerivedFrame(sourceFrame, derivedKey, CodecType.G711U, "audio-g711u", payload, false));
                 av_packet_unref(encPkt);
             }
         }
@@ -219,7 +235,7 @@ final class AacToG711Transcoder implements AutoCloseable {
         } else if (decCtx.ch_layout() != null && decCtx.ch_layout().nb_channels() > 0) {
             av_channel_layout_copy(sourceChannelLayout, decCtx.ch_layout());
         } else {
-            av_channel_layout_default(sourceChannelLayout, 2);
+            av_channel_layout_default(sourceChannelLayout, 1);
         }
         if (swr == null) {
             swr = swr_alloc();
@@ -272,6 +288,31 @@ final class AacToG711Transcoder implements AutoCloseable {
         resampledFrame.nb_samples(samples);
         av_channel_layout_uninit(sourceChannelLayout);
         return resampledFrame;
+    }
+
+    private InboundMediaFrame copyAsDerivedFrame(
+            InboundMediaFrame sourceFrame,
+            StreamKey derivedKey,
+            CodecType codecType,
+            String trackId,
+            byte[] payload,
+            boolean configFrame
+    ) {
+        return new InboundMediaFrame(
+                sourceFrame.sourceProtocol(),
+                TrackType.AUDIO,
+                codecType,
+                sourceFrame.sessionId(),
+                derivedKey,
+                trackId,
+                sourceFrame.ptsMillis(),
+                sourceFrame.dtsMillis(),
+                false,
+                configFrame,
+                sourceFrame.outOfBandParameterSetsReady(),
+                sourceFrame.remoteAddress(),
+                payload
+        );
     }
 
     private void resetDecoder() {

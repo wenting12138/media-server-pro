@@ -204,6 +204,63 @@ public class ServerWebRtcPeerSessionTest {
     }
 
     @Test
+    public void shouldNotTranscodeAacAudioInsidePeerSession() throws Exception {
+        RecordingDatagramIoSender sender = new RecordingDatagramIoSender();
+        SessionDatagramIo datagramIo = new SessionDatagramIo(new InetSocketAddress("127.0.0.1", 18081), sender);
+        RTCPeerConnection peerConnection = new RTCPeerConnection(datagramIo);
+        RTCRtpTransceiver transceiver = peerConnection.addTrack(new MediaStreamTrack(MediaStreamTrack.Kind.AUDIO, "audio"));
+        transceiver.setNegotiatedPayloadType(Integer.valueOf(0));
+        transceiver.setNegotiatedClockRate(Integer.valueOf(8000));
+        transceiver.setNegotiatedCodecType(CodecType.G711U);
+        byte[] keyMaterial = keyMaterial();
+        transceiver.getSender().setSrtpContext(SrtpCryptoContext.fromKeyMaterial(keyMaterial, true));
+        StreamKey streamKey = new StreamKey(StreamProtocol.RTMP, "live", "cam01");
+        ServerWebRtcPeerSession session = new ServerWebRtcPeerSession(
+                "sess-5",
+                streamKey,
+                peerConnection,
+                datagramIo
+        );
+        InetSocketAddress remoteAddress = new InetSocketAddress("127.0.0.1", 50003);
+
+        try {
+            session.receive(new byte[0], remoteAddress);
+            session.writeInboundFrame(new InboundMediaFrame(
+                    StreamProtocol.RTMP,
+                    TrackType.AUDIO,
+                    CodecType.AAC,
+                    "publisher",
+                    streamKey,
+                    "audio-aac",
+                    Long.valueOf(0L),
+                    Long.valueOf(0L),
+                    false,
+                    true,
+                    null,
+                    new byte[]{0x12, 0x10}
+            ));
+            session.writeInboundFrame(new InboundMediaFrame(
+                    StreamProtocol.RTMP,
+                    TrackType.AUDIO,
+                    CodecType.AAC,
+                    "publisher",
+                    streamKey,
+                    "audio-aac",
+                    Long.valueOf(20L),
+                    Long.valueOf(20L),
+                    false,
+                    false,
+                    null,
+                    new byte[]{0x01, 0x02, 0x03, 0x04}
+            ));
+
+            assertEquals(0, sender.sentPackets.size());
+        } finally {
+            session.close();
+        }
+    }
+
+    @Test
     public void shouldNotCloseInjectedTransportWhenPeerConnectionCloses() throws Exception {
         StubDatagramIo transport = new StubDatagramIo();
         RTCPeerConnection peerConnection = new RTCPeerConnection(transport);

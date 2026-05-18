@@ -130,6 +130,30 @@ public final class PublishedTrackMetadataResolver {
         return decodeParameter(description, trackId, "sprop-pps");
     }
 
+    public static byte[] resolveAacAudioSpecificConfig(SdpSessionDescription description, String trackId) {
+        SdpMediaDescription media = findMediaDescription(description, trackId);
+        if (media == null || media.codecName() == null) {
+            return null;
+        }
+        String codec = media.codecName().trim().toUpperCase(Locale.ROOT);
+        if (!"AAC".equals(codec) && !"MPEG4-GENERIC".equals(codec)) {
+            return null;
+        }
+        return decodeHex(media.fmtpParameters().get("config"));
+    }
+
+    public static int resolveAacSizeLength(SdpSessionDescription description, String trackId) {
+        return parsePositiveIntFmtp(description, trackId, "sizelength", 13);
+    }
+
+    public static int resolveAacIndexLength(SdpSessionDescription description, String trackId) {
+        return parsePositiveIntFmtp(description, trackId, "indexlength", 3);
+    }
+
+    public static int resolveAacIndexDeltaLength(SdpSessionDescription description, String trackId) {
+        return parsePositiveIntFmtp(description, trackId, "indexdeltalength", 3);
+    }
+
     private static boolean matchesTrack(String control, String trackId) {
         if (control.isEmpty() || trackId.isEmpty()) {
             return false;
@@ -198,6 +222,43 @@ public final class PublishedTrackMetadataResolver {
             return Base64.getDecoder().decode(value.trim());
         } catch (IllegalArgumentException ignore) {
             return null;
+        }
+    }
+
+    private static byte[] decodeHex(String value) {
+        if (!hasValue(value)) {
+            return null;
+        }
+        String normalized = value.trim();
+        if ((normalized.length() & 1) != 0) {
+            return null;
+        }
+        byte[] bytes = new byte[normalized.length() / 2];
+        for (int i = 0; i < bytes.length; i++) {
+            int index = i * 2;
+            try {
+                bytes[i] = (byte) Integer.parseInt(normalized.substring(index, index + 2), 16);
+            } catch (NumberFormatException e) {
+                return null;
+            }
+        }
+        return bytes;
+    }
+
+    private static int parsePositiveIntFmtp(SdpSessionDescription description, String trackId, String parameterName, int defaultValue) {
+        SdpMediaDescription media = findMediaDescription(description, trackId);
+        if (media == null) {
+            return defaultValue;
+        }
+        String value = media.fmtpParameters().get(parameterName);
+        if (!hasValue(value)) {
+            return defaultValue;
+        }
+        try {
+            int parsed = Integer.parseInt(value.trim());
+            return parsed > 0 ? parsed : defaultValue;
+        } catch (NumberFormatException e) {
+            return defaultValue;
         }
     }
 }

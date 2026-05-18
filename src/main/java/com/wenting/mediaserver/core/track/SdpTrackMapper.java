@@ -59,7 +59,11 @@ public final class SdpTrackMapper {
                     connectionAddress,
                     media.clockRate() == null ? 0 : media.clockRate().intValue(),
                     media.channels() == null ? 0 : media.channels().intValue(),
-                    media.bandwidthAsKbps() == null ? 0 : media.bandwidthAsKbps().intValue() * 1000
+                    media.bandwidthAsKbps() == null ? 0 : media.bandwidthAsKbps().intValue() * 1000,
+                    PublishedTrackMetadataResolver.resolveAacAudioSpecificConfig(description, trackId),
+                    PublishedTrackMetadataResolver.resolveAacSizeLength(description, trackId),
+                    PublishedTrackMetadataResolver.resolveAacIndexLength(description, trackId),
+                    PublishedTrackMetadataResolver.resolveAacIndexDeltaLength(description, trackId)
             );
         }
         return null;
