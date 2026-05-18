@@ -2,8 +2,11 @@ package com.wenting.mediaserver.protocol.webrtc.util;
 
 import com.wenting.mediaserver.core.codec.rtcp.RtcpReportBlock;
 
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 public class ReportPacketUtil {
 
@@ -34,6 +37,56 @@ public class ReportPacketUtil {
         return packet;
     }
 
+    public static byte[] encodeGenericNackPacket(long senderSsrc, long mediaSsrc, List<Integer> lostSequenceNumbers) {
+        List<NackChunk> chunks = buildNackChunks(lostSequenceNumbers);
+        int totalLength = 12 + (chunks.size() * 4);
+        byte[] packet = new byte[totalLength];
+        packet[0] = (byte) 0x81;
+        packet[1] = (byte) 205;
+        int lengthWords = (totalLength / 4) - 1;
+        writeUnsignedShort(packet, 2, lengthWords);
+        writeUnsignedInt(packet, 4, senderSsrc & 0xFFFFFFFFL);
+        writeUnsignedInt(packet, 8, mediaSsrc & 0xFFFFFFFFL);
+        int offset = 12;
+        for (NackChunk chunk : chunks) {
+            writeUnsignedShort(packet, offset, chunk.pid);
+            writeUnsignedShort(packet, offset + 2, chunk.blp);
+            offset += 4;
+        }
+        return packet;
+    }
+
+    private static List<NackChunk> buildNackChunks(List<Integer> lostSequenceNumbers) {
+        if (lostSequenceNumbers == null || lostSequenceNumbers.isEmpty()) {
+            return Collections.emptyList();
+        }
+        Set<Integer> ordered = new LinkedHashSet<Integer>();
+        for (Integer sequenceNumber : lostSequenceNumbers) {
+            if (sequenceNumber != null) {
+                ordered.add(Integer.valueOf(sequenceNumber.intValue() & 0xFFFF));
+            }
+        }
+        List<NackChunk> chunks = new ArrayList<NackChunk>();
+        List<Integer> sequenceNumbers = new ArrayList<Integer>(ordered);
+        int index = 0;
+        while (index < sequenceNumbers.size()) {
+            int pid = sequenceNumbers.get(index).intValue() & 0xFFFF;
+            int blp = 0;
+            index++;
+            while (index < sequenceNumbers.size()) {
+                int sequenceNumber = sequenceNumbers.get(index).intValue() & 0xFFFF;
+                int delta = (sequenceNumber - pid) & 0xFFFF;
+                if (delta <= 0 || delta > 16) {
+                    break;
+                }
+                blp |= (1 << (delta - 1));
+                index++;
+            }
+            chunks.add(new NackChunk(pid, blp));
+        }
+        return chunks;
+    }
+
     private static int clampSigned24(int value) {
         if (value > 0x7FFFFF) {
             return 0x7FFFFF;
@@ -62,5 +115,14 @@ public class ReportPacketUtil {
         data[offset + 2] = (byte) (value & 0xFF);
     }
 
+    private static final class NackChunk {
+        private final int pid;
+        private final int blp;
+
+        private NackChunk(int pid, int blp) {
+            this.pid = pid;
+            this.blp = blp;
+        }
+    }
 
 }

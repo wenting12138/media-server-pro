@@ -19,6 +19,8 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class WebRtcIngestFeedbackController {
 
     private static final Logger log = LoggerFactory.getLogger(WebRtcIngestFeedbackController.class);
+    private static final long RECEIVER_REPORT_INTERVAL_MS = 1000L;
+    private static final int MAX_NACK_BATCH = 32;
 
     private final RTCPeerConnection peerConnection;
     private final Map<String, TrackFeedbackState> statesByTrackId = new ConcurrentHashMap<String, TrackFeedbackState>();
@@ -34,7 +36,7 @@ public final class WebRtcIngestFeedbackController {
             return;
         }
         String trackId = trackId(transceiver);
-        statesByTrackId.put(trackId, new TrackFeedbackState(transceiver, trackId));
+        statesByTrackId.put(trackId, new TrackFeedbackState(transceiver, trackId, new NackGenerator()));
     }
 
     public void onRtpPacket(RTCRtpTransceiver transceiver, RtpPacket packet) {
@@ -51,7 +53,9 @@ public final class WebRtcIngestFeedbackController {
         int clockRate = transceiver.getNegotiatedClockRate() == null
                 ? 90000
                 : transceiver.getNegotiatedClockRate().intValue();
-        state.stats.onRtpPacket(packet, clockRate, System.currentTimeMillis());
+        long nowMs = System.currentTimeMillis();
+        state.stats.onRtpPacket(packet, clockRate, nowMs);
+        state.nackGenerator.onSequenceReceived(packet.getSequenceNumber(), nowMs);
     }
 
     public void onRtcpPacket(RtcpPacket packet) {
@@ -68,7 +72,7 @@ public final class WebRtcIngestFeedbackController {
         }
     }
 
-    public void sendReceiverReports() {
+    public void runPeriodicTasks() {
         long nowMs = System.currentTimeMillis();
         for (TrackFeedbackState state : statesByTrackId.values()) {
             if (state == null || state.transceiver == null || state.stats == null || !state.stats.hasReceivedPackets()) {
@@ -78,18 +82,38 @@ public final class WebRtcIngestFeedbackController {
             if (receiver == null || receiver.getPeerSsrc() <= 0L) {
                 continue;
             }
-            boolean sent = peerConnection.sendReceiverReport(
-                    state.transceiver.getSender().getSsrc(),
-                    state.stats.snapshotReportBlock(nowMs)
-            );
-            if (sent) {
-                state.reportsSent++;
-                if (!state.firstReportLogged) {
-                    state.firstReportLogged = true;
-                    log.info("Sent first WebRTC ingest RR track={} mediaSsrc={} receiverSsrc={}",
+            if ((nowMs - state.lastReceiverReportAtMs) >= RECEIVER_REPORT_INTERVAL_MS) {
+                boolean sent = peerConnection.sendReceiverReport(
+                        state.transceiver.getSender().getSsrc(),
+                        state.stats.snapshotReportBlock(nowMs)
+                );
+                if (sent) {
+                    state.lastReceiverReportAtMs = nowMs;
+                    state.reportsSent++;
+                    if (!state.firstReportLogged) {
+                        state.firstReportLogged = true;
+                        log.info("Sent first WebRTC ingest RR track={} mediaSsrc={} receiverSsrc={}",
+                                state.trackId,
+                                state.stats.mediaSsrc(),
+                                state.transceiver.getSender().getSsrc() & 0xFFFFFFFFL);
+                    }
+                }
+            }
+            java.util.List<Integer> dueNacks = state.nackGenerator.pollDueNacks(nowMs, MAX_NACK_BATCH);
+            if (!dueNacks.isEmpty()) {
+                boolean sent = peerConnection.sendGenericNack(
+                        state.transceiver.getSender().getSsrc(),
+                        state.stats.mediaSsrc(),
+                        dueNacks
+                );
+                if (sent) {
+                    state.nacksSent += dueNacks.size();
+                    log.info("Sent WebRTC ingest NACK track={} mediaSsrc={} receiverSsrc={} lostSeqCount={} lostSeqs={}",
                             state.trackId,
                             state.stats.mediaSsrc(),
-                            state.transceiver.getSender().getSsrc() & 0xFFFFFFFFL);
+                            state.transceiver.getSender().getSsrc() & 0xFFFFFFFFL,
+                            dueNacks.size(),
+                            dueNacks);
                 }
             }
         }
@@ -100,16 +124,5 @@ public final class WebRtcIngestFeedbackController {
         return mid == null || mid.trim().isEmpty() ? "track" : mid.trim();
     }
 
-    private static final class TrackFeedbackState {
-        private final RTCRtpTransceiver transceiver;
-        private final String trackId;
-        private volatile InboundRtpReceiveStats stats;
-        private volatile boolean firstReportLogged;
-        private volatile long reportsSent;
 
-        private TrackFeedbackState(RTCRtpTransceiver transceiver, String trackId) {
-            this.transceiver = transceiver;
-            this.trackId = trackId;
-        }
-    }
 }

@@ -31,7 +31,7 @@ import java.util.function.Consumer;
  */
 public final class WebRtcPublishPeerSession implements AutoCloseable {
 
-    private static final long RECEIVER_REPORT_INTERVAL_MS = 1000L;
+    private static final long FEEDBACK_TICK_INTERVAL_MS = 50L;
 
     private final String sessionId;
     private final StreamKey streamKey;
@@ -65,9 +65,9 @@ public final class WebRtcPublishPeerSession implements AutoCloseable {
         bindReceivers();
         bindRtcpListener();
         feedbackExecutor.scheduleAtFixedRate(
-                feedbackController::sendReceiverReports,
-                RECEIVER_REPORT_INTERVAL_MS,
-                RECEIVER_REPORT_INTERVAL_MS,
+                feedbackController::runPeriodicTasks,
+                FEEDBACK_TICK_INTERVAL_MS,
+                FEEDBACK_TICK_INTERVAL_MS,
                 TimeUnit.MILLISECONDS
         );
     }

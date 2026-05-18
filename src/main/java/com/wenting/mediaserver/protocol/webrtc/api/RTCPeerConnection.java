@@ -482,6 +482,24 @@ public class RTCPeerConnection implements AutoCloseable {
         return true;
     }
 
+    public boolean sendGenericNack(long senderSsrc, long mediaSsrc, List<Integer> lostSequenceNumbers) {
+        if (lostSequenceNumbers == null || lostSequenceNumbers.isEmpty()) {
+            return false;
+        }
+        InetSocketAddress addr = remoteAddress;
+        SrtpCryptoContext context = resolveInboundSrtcpContext();
+        if (addr == null || context == null) {
+            return false;
+        }
+        byte[] plainRtcp = ReportPacketUtil.encodeGenericNackPacket(senderSsrc, mediaSsrc, lostSequenceNumbers);
+        byte[] protectedRtcp = new SrtcpTransform(context).protect(plainRtcp);
+        transport.send(protectedRtcp, addr).exceptionally(ex -> {
+            LOG.warn("Failed to send SRTCP generic NACK: {}", ex.getMessage());
+            return null;
+        });
+        return true;
+    }
+
     // ========================================================================
     // Public API — Lifecycle
     // ========================================================================

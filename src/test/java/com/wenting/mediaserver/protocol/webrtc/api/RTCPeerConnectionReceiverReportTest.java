@@ -1,13 +1,14 @@
 package com.wenting.mediaserver.protocol.webrtc.api;
 
+import com.wenting.mediaserver.core.codec.rtcp.RtcpGenericNackPacket;
 import com.wenting.mediaserver.core.codec.rtcp.RtcpReceiverReportPacket;
 import com.wenting.mediaserver.core.codec.rtcp.RtcpReportBlock;
 import com.wenting.mediaserver.core.codec.rtp.RtpPacketParser;
 import com.wenting.mediaserver.core.codec.rtp.RtpParseResult;
 import com.wenting.mediaserver.protocol.webrtc.util.ReportPacketUtil;
-import com.wenting.mediaserver.protocol.webrtc.util.WebrtcPacketUtil;
 import org.junit.jupiter.api.Test;
 
+import java.util.Arrays;
 import java.util.Collections;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -47,5 +48,23 @@ class RTCPeerConnectionReceiverReportTest {
         assertEquals(reportBlock.interarrivalJitter(), parsedBlock.interarrivalJitter());
         assertEquals(reportBlock.lastSenderReport(), parsedBlock.lastSenderReport());
         assertEquals(reportBlock.delaySinceLastSenderReport(), parsedBlock.delaySinceLastSenderReport());
+    }
+
+    @Test
+    void shouldEncodeGenericNackPacket() {
+        byte[] packet = ReportPacketUtil.encodeGenericNackPacket(
+                0x55667788L,
+                0x11223344L,
+                Arrays.asList(1001, 1002, 1005, 1006, 1019)
+        );
+
+        RtpParseResult parseResult = new RtpPacketParser().parse(packet);
+        assertTrue(parseResult.rtcp());
+        assertTrue(parseResult.rtcpPacket() instanceof RtcpGenericNackPacket);
+
+        RtcpGenericNackPacket nackPacket = (RtcpGenericNackPacket) parseResult.rtcpPacket();
+        assertEquals(0x55667788L, nackPacket.senderSsrc());
+        assertEquals(0x11223344L, nackPacket.mediaSsrc());
+        assertEquals(Arrays.asList(1001, 1002, 1005, 1006, 1019), nackPacket.lostSequenceNumbers());
     }
 }
