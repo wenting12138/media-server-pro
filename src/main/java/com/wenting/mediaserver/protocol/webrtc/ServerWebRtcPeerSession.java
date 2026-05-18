@@ -12,6 +12,7 @@ import com.wenting.mediaserver.core.remux.rtp.RtpPayloadTypeResolver;
 import com.wenting.mediaserver.core.remux.rtp.RtpSendTrackState;
 import com.wenting.mediaserver.core.remux.rtp.RtspFrameToRtpPacketizer;
 import com.wenting.mediaserver.protocol.webrtc.api.RTCPeerConnection;
+import com.wenting.mediaserver.protocol.webrtc.api.RtcpFeedbackListener;
 import com.wenting.mediaserver.protocol.webrtc.api.RTCRtpSender;
 import com.wenting.mediaserver.protocol.webrtc.api.RTCRtpTransceiver;
 import com.wenting.mediaserver.protocol.webrtc.core.rtp.RtpPacket;
@@ -21,6 +22,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.net.InetSocketAddress;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -52,10 +57,22 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
     private final Map<String, Boolean> firstDropReasonLogged = new ConcurrentHashMap<String, Boolean>();
     private final Map<String, Boolean> firstNonConfigKeyFrameLoggedByTrackId = new ConcurrentHashMap<String, Boolean>();
     private final Map<String, Boolean> configProfileLoggedByTrackId = new ConcurrentHashMap<String, Boolean>();
+    private final Map<String, Boolean> feedbackListenerBoundByTrackId = new ConcurrentHashMap<String, Boolean>();
+    private final Map<String, SentSrtpPacketCache> sentPacketCachesByTrackId = new ConcurrentHashMap<String, SentSrtpPacketCache>();
+    private final Map<String, List<byte[]>> latestConfigPacketsByTrackId = new ConcurrentHashMap<String, List<byte[]>>();
+    private final Map<String, List<byte[]>> latestKeyFramePacketsByTrackId = new ConcurrentHashMap<String, List<byte[]>>();
     private final AtomicLong outboundSrtpPacketCount = new AtomicLong(0);
+    private final AtomicLong pliCount = new AtomicLong(0);
+    private final AtomicLong nackCount = new AtomicLong(0);
+    private final AtomicLong nackResendHitCount = new AtomicLong(0);
+    private final AtomicLong nackResendMissCount = new AtomicLong(0);
     private final AtomicBoolean closed = new AtomicBoolean(false);
     private volatile IPublishedStream publishedStream;
     private volatile InetSocketAddress remoteAddress;
+
+    private static final int MAX_NACK_RESEND_PACKETS = 64;
+    private static final int SENT_PACKET_CACHE_CAPACITY = 4096;
+    private static final long SENT_PACKET_CACHE_MAX_AGE_MS = 2000L;
 
     public ServerWebRtcPeerSession(
             String sessionId,
@@ -210,6 +227,7 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
             return;
         }
         RTCRtpSender sender = transceiver.getSender();
+        bindFeedbackListenerIfNeeded(frame, transceiver);
         List<RtpPacketChunk> chunks = frameToRtpPacketizer.packetize(
                 frame,
                 null,
@@ -226,7 +244,9 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
         int clockRate = resolveClockRate(transceiver, frame);
         long rtpTimestamp = sendState.toRtpTimestamp(clockRate, mediaTimestampMillis(timestampFrame));
         SrtpTransform transform = new SrtpTransform(sender.getSrtpContext(), sender.getSsrc());
+        List<byte[]> sentPackets = new ArrayList<byte[]>(chunks.size());
         for (RtpPacketChunk chunk : chunks) {
+            int sequenceNumber = sendState.nextSequenceNumber();
             RtpPacket rtpPacket = new RtpPacket(
                     2,
                     false,
@@ -234,13 +254,15 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
                     0,
                     chunk.marker(),
                     payloadType,
-                    sendState.nextSequenceNumber(),
+                    sequenceNumber,
                     rtpTimestamp,
                     sender.getSsrc(),
                     null,
                     chunk.payload()
             );
             byte[] srtpPacket = transform.protect(rtpPacket);
+            sentPackets.add(Arrays.copyOf(srtpPacket, srtpPacket.length));
+            cacheSentVideoPacket(frame, sequenceNumber, srtpPacket);
             logFirstSrtpPacket(frame, payloadType, clockRate, target, srtpPacket.length, chunk.marker());
 //            logPacketCount();
             datagramIo.send(srtpPacket, target).exceptionally(ex -> {
@@ -249,6 +271,7 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
                 return null;
             });
         }
+        rememberReplayPackets(frame, sentPackets);
     }
 
     private void logFirstSrtpPacket(InboundMediaFrame frame, int payloadType, int clockRate, InetSocketAddress target, int bytes, boolean marker) {
@@ -321,6 +344,145 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
             return transceiver;
         }
         return null;
+    }
+
+    private void bindFeedbackListenerIfNeeded(InboundMediaFrame frame, RTCRtpTransceiver transceiver) {
+        if (frame == null || transceiver == null || transceiver.getSender() == null || frame.trackType() != TrackType.VIDEO) {
+            return;
+        }
+        String trackId = normalizeTrackId(frame.trackId());
+        if (Boolean.TRUE.equals(feedbackListenerBoundByTrackId.putIfAbsent(trackId, Boolean.TRUE))) {
+            return;
+        }
+        transceiver.getSender().setFeedbackListener(new RtcpFeedbackListener() {
+            @Override
+            public void onPictureLossIndication(long mediaSsrc) {
+                long count = pliCount.incrementAndGet();
+                log.info("WebRTC PLI received session={} stream={} track={} mediaSsrc={} totalPli={}",
+                        sessionId, streamKey, trackId, mediaSsrc, count);
+                replayLatestRecoveryPackets(trackId);
+            }
+
+            @Override
+            public void onGenericNack(long mediaSsrc, List<Integer> lostSequenceNumbers) {
+                long count = nackCount.incrementAndGet();
+                log.info("WebRTC NACK received session={} stream={} track={} mediaSsrc={} lostSeqCount={} lostSeqs={} totalNack={}",
+                        sessionId, streamKey, trackId, mediaSsrc,
+                        lostSequenceNumbers == null ? 0 : lostSequenceNumbers.size(),
+                        lostSequenceNumbers, count);
+                resendLostPackets(trackId, lostSequenceNumbers);
+            }
+        });
+    }
+
+    private void cacheSentVideoPacket(InboundMediaFrame frame, int sequenceNumber, byte[] srtpPacket) {
+        if (frame == null || frame.trackType() != TrackType.VIDEO || srtpPacket == null) {
+            return;
+        }
+        sentPacketCache(frame.trackId()).put(sequenceNumber, srtpPacket, System.currentTimeMillis());
+    }
+
+    private void rememberReplayPackets(InboundMediaFrame frame, List<byte[]> sentPackets) {
+        if (frame == null || sentPackets == null || sentPackets.isEmpty() || frame.trackType() != TrackType.VIDEO) {
+            return;
+        }
+        String trackId = normalizeTrackId(frame.trackId());
+        if (frame.configFrame()) {
+            latestConfigPacketsByTrackId.put(trackId, immutablePacketCopies(sentPackets));
+            return;
+        }
+        if (frame.keyFrame()) {
+            latestKeyFramePacketsByTrackId.put(trackId, immutablePacketCopies(sentPackets));
+        }
+    }
+
+    private void resendLostPackets(String trackId, List<Integer> lostSequenceNumbers) {
+        InetSocketAddress target = remoteAddress;
+        if (target == null || lostSequenceNumbers == null || lostSequenceNumbers.isEmpty()) {
+            return;
+        }
+        SentSrtpPacketCache cache = sentPacketCache(trackId);
+        int attempts = Math.min(lostSequenceNumbers.size(), MAX_NACK_RESEND_PACKETS);
+        int hits = 0;
+        int misses = 0;
+        for (int i = 0; i < attempts; i++) {
+            Integer sequenceNumber = lostSequenceNumbers.get(i);
+            if (sequenceNumber == null) {
+                continue;
+            }
+            byte[] packet = cache.get(sequenceNumber.intValue(), System.currentTimeMillis());
+            if (packet == null) {
+                misses++;
+                continue;
+            }
+            hits++;
+            datagramIo.send(Arrays.copyOf(packet, packet.length), target).exceptionally(ex -> {
+                log.warn("Failed to resend WebRTC SRTP packet session={} stream={} target={} seq={}",
+                        sessionId, streamKey, target, sequenceNumber, ex);
+                return null;
+            });
+        }
+        nackResendHitCount.addAndGet(hits);
+        nackResendMissCount.addAndGet(misses);
+        log.info("WebRTC NACK resend summary session={} stream={} track={} requested={} attempted={} hits={} misses={} totalHit={} totalMiss={}",
+                sessionId, streamKey, trackId, lostSequenceNumbers.size(), attempts, hits, misses,
+                nackResendHitCount.get(), nackResendMissCount.get());
+    }
+
+    private void replayLatestRecoveryPackets(String trackId) {
+        InetSocketAddress target = remoteAddress;
+        if (target == null) {
+            return;
+        }
+        List<byte[]> configPackets = latestConfigPacketsByTrackId.get(trackId);
+        List<byte[]> keyFramePackets = latestKeyFramePacketsByTrackId.get(trackId);
+        int replayed = replayPackets(configPackets, target);
+        replayed += replayPackets(keyFramePackets, target);
+        log.info("WebRTC PLI recovery replay session={} stream={} track={} replayedPackets={} hasConfig={} hasKeyframe={}",
+                sessionId, streamKey, trackId, replayed,
+                configPackets != null && !configPackets.isEmpty(),
+                keyFramePackets != null && !keyFramePackets.isEmpty());
+    }
+
+    private int replayPackets(List<byte[]> packets, InetSocketAddress target) {
+        if (packets == null || packets.isEmpty()) {
+            return 0;
+        }
+        int count = 0;
+        for (byte[] packet : packets) {
+            if (packet == null || packet.length == 0) {
+                continue;
+            }
+            count++;
+            datagramIo.send(Arrays.copyOf(packet, packet.length), target).exceptionally(ex -> {
+                log.warn("Failed to replay WebRTC SRTP recovery packet session={} stream={} target={}",
+                        sessionId, streamKey, target, ex);
+                return null;
+            });
+        }
+        return count;
+    }
+
+    private SentSrtpPacketCache sentPacketCache(String trackId) {
+        String normalized = normalizeTrackId(trackId);
+        SentSrtpPacketCache existing = sentPacketCachesByTrackId.get(normalized);
+        if (existing != null) {
+            return existing;
+        }
+        SentSrtpPacketCache created = new SentSrtpPacketCache(SENT_PACKET_CACHE_CAPACITY, SENT_PACKET_CACHE_MAX_AGE_MS);
+        SentSrtpPacketCache raced = sentPacketCachesByTrackId.putIfAbsent(normalized, created);
+        return raced == null ? created : raced;
+    }
+
+    private List<byte[]> immutablePacketCopies(List<byte[]> packets) {
+        if (packets == null || packets.isEmpty()) {
+            return Collections.emptyList();
+        }
+        List<byte[]> copies = new ArrayList<byte[]>(packets.size());
+        for (byte[] packet : packets) {
+            copies.add(packet == null ? new byte[0] : Arrays.copyOf(packet, packet.length));
+        }
+        return Collections.unmodifiableList(copies);
     }
 
     private boolean matchesKind(RTCRtpTransceiver transceiver, InboundMediaFrame frame) {
@@ -407,5 +569,57 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
         }
         peerConnection.close();
         datagramIo.close();
+    }
+
+    private static final class SentSrtpPacketCache {
+        private final int capacity;
+        private final long maxAgeMs;
+        private final LinkedHashMap<Integer, CachedSrtpPacket> packets = new LinkedHashMap<Integer, CachedSrtpPacket>(128, 0.75f, true);
+
+        private SentSrtpPacketCache(int capacity, long maxAgeMs) {
+            this.capacity = Math.max(1, capacity);
+            this.maxAgeMs = Math.max(1L, maxAgeMs);
+        }
+
+        private synchronized void put(int sequenceNumber, byte[] packet, long nowMs) {
+            if (packet == null || packet.length == 0) {
+                return;
+            }
+            evictExpired(nowMs);
+            packets.put(Integer.valueOf(sequenceNumber & 0xFFFF), new CachedSrtpPacket(Arrays.copyOf(packet, packet.length), nowMs));
+            while (packets.size() > capacity) {
+                Integer eldest = packets.keySet().iterator().next();
+                packets.remove(eldest);
+            }
+        }
+
+        private synchronized byte[] get(int sequenceNumber, long nowMs) {
+            evictExpired(nowMs);
+            CachedSrtpPacket packet = packets.get(Integer.valueOf(sequenceNumber & 0xFFFF));
+            if (packet == null) {
+                return null;
+            }
+            return Arrays.copyOf(packet.packet, packet.packet.length);
+        }
+
+        private void evictExpired(long nowMs) {
+            while (!packets.isEmpty()) {
+                Map.Entry<Integer, CachedSrtpPacket> eldest = packets.entrySet().iterator().next();
+                if (nowMs - eldest.getValue().sentAtMs <= maxAgeMs) {
+                    return;
+                }
+                packets.remove(eldest.getKey());
+            }
+        }
+    }
+
+    private static final class CachedSrtpPacket {
+        private final byte[] packet;
+        private final long sentAtMs;
+
+        private CachedSrtpPacket(byte[] packet, long sentAtMs) {
+            this.packet = packet;
+            this.sentAtMs = sentAtMs;
+        }
     }
 }

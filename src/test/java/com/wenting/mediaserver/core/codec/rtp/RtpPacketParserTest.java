@@ -1,9 +1,13 @@
 package com.wenting.mediaserver.core.codec.rtp;
 
 import com.wenting.mediaserver.core.codec.rtcp.RtcpReceiverReportPacket;
+import com.wenting.mediaserver.core.codec.rtcp.RtcpGenericNackPacket;
+import com.wenting.mediaserver.core.codec.rtcp.RtcpPictureLossIndicationPacket;
 import com.wenting.mediaserver.core.codec.rtcp.RtcpReportBlock;
 import com.wenting.mediaserver.core.codec.rtcp.RtcpSenderReportPacket;
 import org.junit.jupiter.api.Test;
+
+import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -142,5 +146,48 @@ class RtpPacketParserTest {
         assertNull(parser.parse(null));
         assertNull(parser.parse(new byte[]{0x00, 0x01, 0x02, 0x03}));
         assertNull(parser.parse(new byte[]{(byte) 0x80, 0x60, 0x00}));
+    }
+
+    @Test
+    void shouldParseRtcpGenericNack() {
+        byte[] packet = new byte[]{
+                (byte) 0x81,
+                (byte) 205,
+                0x00, 0x03,
+                0x01, 0x02, 0x03, 0x04,
+                0x11, 0x22, 0x33, 0x44,
+                0x12, 0x34,
+                0x00, 0x05
+        };
+
+        RtpParseResult result = parser.parse(packet);
+
+        assertNotNull(result);
+        assertTrue(result.rtcp());
+        assertTrue(result.rtcpPacket() instanceof RtcpGenericNackPacket);
+        RtcpGenericNackPacket nack = (RtcpGenericNackPacket) result.rtcpPacket();
+        assertEquals(0x01020304L, nack.senderSsrc());
+        assertEquals(0x11223344L, nack.mediaSsrc());
+        assertEquals(Arrays.asList(Integer.valueOf(0x1234), Integer.valueOf(0x1235), Integer.valueOf(0x1237)), nack.lostSequenceNumbers());
+    }
+
+    @Test
+    void shouldParseRtcpPictureLossIndication() {
+        byte[] packet = new byte[]{
+                (byte) 0x81,
+                (byte) 206,
+                0x00, 0x02,
+                0x01, 0x02, 0x03, 0x04,
+                0x11, 0x22, 0x33, 0x44
+        };
+
+        RtpParseResult result = parser.parse(packet);
+
+        assertNotNull(result);
+        assertTrue(result.rtcp());
+        assertTrue(result.rtcpPacket() instanceof RtcpPictureLossIndicationPacket);
+        RtcpPictureLossIndicationPacket pli = (RtcpPictureLossIndicationPacket) result.rtcpPacket();
+        assertEquals(0x01020304L, pli.senderSsrc());
+        assertEquals(0x11223344L, pli.mediaSsrc());
     }
 }

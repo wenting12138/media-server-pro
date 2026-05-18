@@ -1,5 +1,6 @@
 package com.wenting.mediaserver.protocol.webrtc.api;
 
+import com.wenting.mediaserver.core.codec.rtp.RtpParseResult;
 import com.wenting.mediaserver.core.enums.publish.CodecType;
 import com.wenting.mediaserver.protocol.webrtc.WebRtcUdpBootstrap;
 import com.wenting.mediaserver.protocol.webrtc.core.dtls.DtlsHandshake;
@@ -16,10 +17,15 @@ import com.wenting.mediaserver.protocol.webrtc.core.sdp.*;
 import com.wenting.mediaserver.protocol.webrtc.core.sdp.SdpDescription.MediaDescription;
 import com.wenting.mediaserver.protocol.webrtc.core.srtp.SrtpCryptoContext;
 import com.wenting.mediaserver.protocol.webrtc.core.srtp.SrtpException;
+import com.wenting.mediaserver.protocol.webrtc.core.srtp.SrtcpTransform;
 import com.wenting.mediaserver.protocol.webrtc.core.srtp.SrtpTransform;
 import com.wenting.mediaserver.protocol.webrtc.core.stun.StunMessage;
 import com.wenting.mediaserver.protocol.webrtc.transport.DatagramIo;
 import com.wenting.mediaserver.protocol.webrtc.transport.UdpTransport;
+import com.wenting.mediaserver.core.codec.rtcp.RtcpGenericNackPacket;
+import com.wenting.mediaserver.core.codec.rtcp.RtcpPacket;
+import com.wenting.mediaserver.core.codec.rtcp.RtcpPictureLossIndicationPacket;
+import com.wenting.mediaserver.core.codec.rtp.RtpPacketParser;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -87,6 +93,7 @@ public class RTCPeerConnection implements AutoCloseable {
     private final ConcurrentHashMap<Long, Consumer<byte[]>> ssrcHandlers = new ConcurrentHashMap<>();
     private volatile boolean srtpActive = false;
     private volatile InetSocketAddress remoteAddress;
+    private volatile SrtpCryptoContext inboundSrtcpContext;
 
     // ---- ICE credentials ----
     private String localUfrag;
@@ -127,6 +134,7 @@ public class RTCPeerConnection implements AutoCloseable {
             t.setDaemon(true);
             return t;
         });
+    private final RtpPacketParser rtpPacketParser = new RtpPacketParser();
 
     // ========================================================================
     // Constructor
@@ -908,6 +916,7 @@ public class RTCPeerConnection implements AutoCloseable {
                 LOG.info("Registered SRTP demux for SSRC " + peerSsrc + " (" + transceiver.getKind() + ")");
             }
         }
+        inboundSrtcpContext = transceivers.isEmpty() ? null : transceivers.get(0).getReceiver().getSrtpContext();
     }
 
     private void fireOnTrack(RTCRtpReceiver receiver) {
@@ -1026,6 +1035,8 @@ public class RTCPeerConnection implements AutoCloseable {
                         + " bytes=" + data.length);
                 }
                 dtlsReceiveQueue.offer(data);
+            } else if (isRtcpPacket(data)) {
+                handleRtcpPacket(data, remote);
             } else if (isRtpPacket(data)) {
                 handleRtpPacket(data, remote);
             }
@@ -1045,6 +1056,10 @@ public class RTCPeerConnection implements AutoCloseable {
         return data.length >= 12 && (data[0] & 0xC0) == 0x80;
     }
 
+    private static boolean isRtcpPacket(byte[] data) {
+        return data.length >= 8 && (data[0] & 0xC0) == 0x80 && (data[1] & 0xFF) >= 192 && (data[1] & 0xFF) <= 223;
+    }
+
     private void handleRtpPacket(byte[] data, InetSocketAddress remote) {
         if (data.length < 12) return;
         // Extract SSRC from RTP header bytes 8-11
@@ -1062,6 +1077,73 @@ public class RTCPeerConnection implements AutoCloseable {
                 dtlsReceiveQueue.offer(data);
             }
         }
+    }
+
+    private void handleRtcpPacket(byte[] data, InetSocketAddress remote) {
+        SrtpCryptoContext context = resolveInboundSrtcpContext();
+        if (context == null) {
+            LOG.debug("Dropping SRTCP packet before SRTP contexts are ready from {}", remote);
+            return;
+        }
+        try {
+            byte[] plainRtcp = new SrtcpTransform(context).unprotect(data);
+            RtpParseResult parseResult = rtpPacketParser.parse(plainRtcp);
+            if (parseResult == null || !parseResult.rtcp() || parseResult.rtcpPacket() == null) {
+                return;
+            }
+            dispatchRtcpFeedback(parseResult.rtcpPacket());
+        } catch (SrtpException e) {
+            LOG.debug("SRTCP unprotect failed from {}: {}", remote, e.getMessage());
+        }
+    }
+
+    private SrtpCryptoContext resolveInboundSrtcpContext() {
+        SrtpCryptoContext context = inboundSrtcpContext;
+        if (context != null) {
+            return context;
+        }
+        for (RTCRtpTransceiver transceiver : transceivers) {
+            if (transceiver == null || transceiver.getReceiver() == null) {
+                continue;
+            }
+            context = transceiver.getReceiver().getSrtpContext();
+            if (context != null) {
+                inboundSrtcpContext = context;
+                return context;
+            }
+        }
+        return null;
+    }
+
+    private void dispatchRtcpFeedback(RtcpPacket packet) {
+        if (packet instanceof RtcpPictureLossIndicationPacket) {
+            RtcpPictureLossIndicationPacket pli = (RtcpPictureLossIndicationPacket) packet;
+            RTCRtpSender sender = findSenderBySsrc(pli.mediaSsrc());
+            if (sender != null && sender.getFeedbackListener() != null) {
+                sender.getFeedbackListener().onPictureLossIndication(pli.mediaSsrc());
+            }
+            return;
+        }
+        if (packet instanceof RtcpGenericNackPacket) {
+            RtcpGenericNackPacket nack = (RtcpGenericNackPacket) packet;
+            RTCRtpSender sender = findSenderBySsrc(nack.mediaSsrc());
+            if (sender != null && sender.getFeedbackListener() != null) {
+                sender.getFeedbackListener().onGenericNack(nack.mediaSsrc(), nack.lostSequenceNumbers());
+            }
+        }
+    }
+
+    private RTCRtpSender findSenderBySsrc(long mediaSsrc) {
+        long normalized = mediaSsrc & 0xFFFFFFFFL;
+        for (RTCRtpTransceiver transceiver : transceivers) {
+            if (transceiver == null || transceiver.getSender() == null) {
+                continue;
+            }
+            if ((transceiver.getSender().getSsrc() & 0xFFFFFFFFL) == normalized) {
+                return transceiver.getSender();
+            }
+        }
+        return null;
     }
 
     private static boolean isStunPacket(byte[] data) {

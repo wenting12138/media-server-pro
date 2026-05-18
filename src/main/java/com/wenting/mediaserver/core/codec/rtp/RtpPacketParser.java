@@ -1,7 +1,9 @@
 package com.wenting.mediaserver.core.codec.rtp;
 
 import com.wenting.mediaserver.core.codec.rtcp.RtcpPacket;
+import com.wenting.mediaserver.core.codec.rtcp.RtcpGenericNackPacket;
 import com.wenting.mediaserver.core.codec.rtcp.RtcpPacketHeader;
+import com.wenting.mediaserver.core.codec.rtcp.RtcpPictureLossIndicationPacket;
 import com.wenting.mediaserver.core.codec.rtcp.RtcpReceiverReportPacket;
 import com.wenting.mediaserver.core.codec.rtcp.RtcpReportBlock;
 import com.wenting.mediaserver.core.codec.rtcp.RtcpSenderReportPacket;
@@ -113,7 +115,7 @@ public final class RtpPacketParser {
     }
 
     private boolean looksLikeRtcp(int secondByte, int packetLength) {
-        return packetLength >= 8 && secondByte >= 200 && secondByte <= 204;
+        return packetLength >= 8 && secondByte >= 192 && secondByte <= 223;
     }
 
     private static int unsignedByte(byte value) {
@@ -140,6 +142,12 @@ public final class RtpPacketParser {
         }
         if (header.packetType() == 201) {
             return parseReceiverReport(packet, header);
+        }
+        if (header.packetType() == 205 && header.reportCount() == 1) {
+            return parseGenericNack(packet);
+        }
+        if (header.packetType() == 206 && header.reportCount() == 1) {
+            return parsePictureLossIndication(packet);
         }
         return null;
     }
@@ -204,6 +212,35 @@ public final class RtpPacketParser {
             cursor += 24;
         }
         return Collections.unmodifiableList(blocks);
+    }
+
+    private RtcpGenericNackPacket parseGenericNack(byte[] packet) {
+        if (packet.length < 12) {
+            return null;
+        }
+        long senderSsrc = unsignedInt(packet, 4);
+        long mediaSsrc = unsignedInt(packet, 8);
+        List<Integer> lostSequenceNumbers = new ArrayList<Integer>();
+        int cursor = 12;
+        while (cursor + 4 <= packet.length) {
+            int pid = unsignedShort(packet, cursor);
+            int blp = unsignedShort(packet, cursor + 2);
+            lostSequenceNumbers.add(Integer.valueOf(pid));
+            for (int bit = 0; bit < 16; bit++) {
+                if (((blp >>> bit) & 0x01) != 0) {
+                    lostSequenceNumbers.add(Integer.valueOf((pid + bit + 1) & 0xFFFF));
+                }
+            }
+            cursor += 4;
+        }
+        return new RtcpGenericNackPacket(senderSsrc, mediaSsrc, Collections.unmodifiableList(lostSequenceNumbers));
+    }
+
+    private RtcpPictureLossIndicationPacket parsePictureLossIndication(byte[] packet) {
+        if (packet.length < 12) {
+            return null;
+        }
+        return new RtcpPictureLossIndicationPacket(unsignedInt(packet, 4), unsignedInt(packet, 8));
     }
 
     private static int signed24(byte[] packet, int offset) {

@@ -9,6 +9,7 @@ import com.wenting.mediaserver.core.publish.MediaSubscriberAdapter;
 import com.wenting.mediaserver.core.publish.DefaultPublishedStream;
 import com.wenting.mediaserver.protocol.webrtc.api.MediaStreamTrack;
 import com.wenting.mediaserver.protocol.webrtc.api.RTCPeerConnection;
+import com.wenting.mediaserver.protocol.webrtc.api.RtcpFeedbackListener;
 import com.wenting.mediaserver.protocol.webrtc.api.RTCRtpTransceiver;
 import com.wenting.mediaserver.protocol.webrtc.core.rtp.RtpPacket;
 import com.wenting.mediaserver.protocol.webrtc.core.srtp.SrtpCryptoContext;
@@ -269,6 +270,83 @@ public class ServerWebRtcPeerSessionTest {
 
         assertTrue(transport.started);
         assertEquals(0, transport.closeCount);
+    }
+
+    @Test
+    public void shouldResendCachedVideoPacketsWhenNackReceived() throws Exception {
+        RecordingDatagramIoSender sender = new RecordingDatagramIoSender();
+        SessionDatagramIo datagramIo = new SessionDatagramIo(new InetSocketAddress("127.0.0.1", 18081), sender);
+        RTCPeerConnection peerConnection = new RTCPeerConnection(datagramIo);
+        RTCRtpTransceiver transceiver = peerConnection.addTrack(new MediaStreamTrack(MediaStreamTrack.Kind.VIDEO, "video"));
+        transceiver.setNegotiatedPayloadType(Integer.valueOf(96));
+        transceiver.setNegotiatedClockRate(Integer.valueOf(90000));
+        transceiver.setNegotiatedCodecType(CodecType.H264);
+        byte[] keyMaterial = keyMaterial();
+        transceiver.getSender().setSrtpContext(SrtpCryptoContext.fromKeyMaterial(keyMaterial, true));
+        StreamKey streamKey = new StreamKey(StreamProtocol.RTMP, "live", "cam01");
+        ServerWebRtcPeerSession session = new ServerWebRtcPeerSession("sess-6", streamKey, peerConnection, datagramIo);
+        InetSocketAddress remoteAddress = new InetSocketAddress("127.0.0.1", 50004);
+
+        try {
+            session.receive(new byte[0], remoteAddress);
+            session.writeInboundFrame(h264ConfigFrame(streamKey));
+            session.writeInboundFrame(h264Frame(streamKey, true, new byte[]{0x65, 0x11, 0x22, 0x33}, 40L));
+
+            assertEquals(3, sender.sentPackets.size());
+            RtcpFeedbackListener listener = transceiver.getSender().getFeedbackListener();
+            assertNotNull(listener);
+
+            SrtpTransform decrypt = new SrtpTransform(SrtpCryptoContext.fromKeyMaterial(keyMaterial, true), transceiver.getSender().getSsrc());
+            RtpPacket resentTarget = decrypt.unprotect(sender.sentPackets.get(2).data);
+            int lostSequenceNumber = resentTarget.getSequenceNumber();
+            listener.onGenericNack(transceiver.getSender().getSsrc(), Arrays.asList(Integer.valueOf(lostSequenceNumber)));
+
+            assertEquals(4, sender.sentPackets.size());
+            RtpPacket resentPacket = decrypt.unprotect(sender.sentPackets.get(3).data);
+            assertEquals(lostSequenceNumber, resentPacket.getSequenceNumber());
+            assertArrayEquals(resentTarget.getPayload(), resentPacket.getPayload());
+        } finally {
+            session.close();
+        }
+    }
+
+    @Test
+    public void shouldReplayLatestConfigAndKeyframeWhenPliReceived() throws Exception {
+        RecordingDatagramIoSender sender = new RecordingDatagramIoSender();
+        SessionDatagramIo datagramIo = new SessionDatagramIo(new InetSocketAddress("127.0.0.1", 18081), sender);
+        RTCPeerConnection peerConnection = new RTCPeerConnection(datagramIo);
+        RTCRtpTransceiver transceiver = peerConnection.addTrack(new MediaStreamTrack(MediaStreamTrack.Kind.VIDEO, "video"));
+        transceiver.setNegotiatedPayloadType(Integer.valueOf(96));
+        transceiver.setNegotiatedClockRate(Integer.valueOf(90000));
+        transceiver.setNegotiatedCodecType(CodecType.H264);
+        byte[] keyMaterial = keyMaterial();
+        transceiver.getSender().setSrtpContext(SrtpCryptoContext.fromKeyMaterial(keyMaterial, true));
+        StreamKey streamKey = new StreamKey(StreamProtocol.RTMP, "live", "cam01");
+        ServerWebRtcPeerSession session = new ServerWebRtcPeerSession("sess-7", streamKey, peerConnection, datagramIo);
+        InetSocketAddress remoteAddress = new InetSocketAddress("127.0.0.1", 50005);
+
+        try {
+            session.receive(new byte[0], remoteAddress);
+            session.writeInboundFrame(h264ConfigFrame(streamKey));
+            session.writeInboundFrame(h264Frame(streamKey, true, new byte[]{0x65, 0x11, 0x22, 0x33}, 40L));
+
+            assertEquals(3, sender.sentPackets.size());
+            RtcpFeedbackListener listener = transceiver.getSender().getFeedbackListener();
+            assertNotNull(listener);
+
+            listener.onPictureLossIndication(transceiver.getSender().getSsrc());
+
+            assertEquals(6, sender.sentPackets.size());
+            SrtpTransform decrypt = new SrtpTransform(SrtpCryptoContext.fromKeyMaterial(keyMaterial, true), transceiver.getSender().getSsrc());
+            RtpPacket replayedSps = decrypt.unprotect(sender.sentPackets.get(3).data);
+            RtpPacket replayedPps = decrypt.unprotect(sender.sentPackets.get(4).data);
+            RtpPacket replayedKey = decrypt.unprotect(sender.sentPackets.get(5).data);
+            assertArrayEquals(new byte[]{0x67, 0x64, 0x00, 0x1F, (byte) 0xAC, (byte) 0xD9, 0x40, 0x78}, replayedSps.getPayload());
+            assertArrayEquals(new byte[]{0x68, (byte) 0xEE, 0x3C, (byte) 0x80}, replayedPps.getPayload());
+            assertArrayEquals(new byte[]{0x65, 0x11, 0x22, 0x33}, replayedKey.getPayload());
+        } finally {
+            session.close();
+        }
     }
 
     private static InboundMediaFrame h264ConfigFrame(StreamKey streamKey) {

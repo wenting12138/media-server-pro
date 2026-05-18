@@ -16,6 +16,9 @@ public final class SrtpCryptoContext {
     private static final int SRTP_ENC_KEY_LEN = 16;
     private static final int SRTP_AUTH_KEY_LEN = 20;
     private static final int SRTP_SALT_KEY_LEN = 14;
+    private static final int SRTCP_ENC_KEY_LEN = 16;
+    private static final int SRTCP_AUTH_KEY_LEN = 20;
+    private static final int SRTCP_SALT_KEY_LEN = 14;
     public static final int AUTH_TAG_LENGTH = 10;
     private static final String HMAC_SHA1 = "HmacSHA1";
     private static final String AES_ECB_NO_PADDING = "AES/ECB/NoPadding";
@@ -23,12 +26,17 @@ public final class SrtpCryptoContext {
     private final byte[] cipherKey;
     private final byte[] authKey;
     private final byte[] saltKey;
+    private final byte[] srtcpCipherKey;
+    private final byte[] srtcpAuthKey;
+    private final byte[] srtcpSaltKey;
 
     private volatile int roc;
     private volatile int lastSeq = -1;
 
     private final ThreadLocal<Cipher> aesCipher = new ThreadLocal<Cipher>();
+    private final ThreadLocal<Cipher> srtcpAesCipher = new ThreadLocal<Cipher>();
     private final ThreadLocal<Mac> hmac = new ThreadLocal<Mac>();
+    private final ThreadLocal<Mac> srtcpHmac = new ThreadLocal<Mac>();
 
     public SrtpCryptoContext(byte[] masterKey, byte[] masterSalt) {
         if (masterKey == null || masterKey.length != MASTER_KEY_LEN) {
@@ -40,6 +48,9 @@ public final class SrtpCryptoContext {
         this.cipherKey = deriveSessionMaterial(masterKey, masterSalt, 0x00, SRTP_ENC_KEY_LEN);
         this.authKey = deriveSessionMaterial(masterKey, masterSalt, 0x01, SRTP_AUTH_KEY_LEN);
         this.saltKey = deriveSessionMaterial(masterKey, masterSalt, 0x02, SRTP_SALT_KEY_LEN);
+        this.srtcpCipherKey = deriveSessionMaterial(masterKey, masterSalt, 0x03, SRTCP_ENC_KEY_LEN);
+        this.srtcpAuthKey = deriveSessionMaterial(masterKey, masterSalt, 0x04, SRTCP_AUTH_KEY_LEN);
+        this.srtcpSaltKey = deriveSessionMaterial(masterKey, masterSalt, 0x05, SRTCP_SALT_KEY_LEN);
     }
 
     public long getRoc() {
@@ -99,6 +110,51 @@ public final class SrtpCryptoContext {
             return false;
         }
         byte[] expected = authenticate(rtpHeader, payload, ssrc, roc);
+        int diff = 0;
+        for (int i = 0; i < AUTH_TAG_LENGTH; i++) {
+            diff |= (expected[i] ^ receivedTag[i]);
+        }
+        return diff == 0;
+    }
+
+    public byte[] encryptRtcp(long ssrc, long srtcpIndex, byte[] payload) {
+        if (payload == null || payload.length == 0) {
+            return payload == null ? new byte[0] : Arrays.copyOf(payload, payload.length);
+        }
+        byte[] result = Arrays.copyOf(payload, payload.length);
+        xorAesCtr(result, 0, result.length,
+                createRtcpIv(srtcpSaltKey, srtcpIndex, (int) (ssrc & 0xFFFFFFFFL)),
+                srtcpCipher());
+        return result;
+    }
+
+    public byte[] decryptRtcp(long ssrc, long srtcpIndex, byte[] encryptedPayload) {
+        if (encryptedPayload == null || encryptedPayload.length == 0) {
+            return encryptedPayload == null ? new byte[0] : Arrays.copyOf(encryptedPayload, encryptedPayload.length);
+        }
+        byte[] result = Arrays.copyOf(encryptedPayload, encryptedPayload.length);
+        xorAesCtr(result, 0, result.length,
+                createRtcpIv(srtcpSaltKey, srtcpIndex, (int) (ssrc & 0xFFFFFFFFL)),
+                srtcpCipher());
+        return result;
+    }
+
+    public byte[] authenticateRtcp(byte[] rtcpPacket, int srtcpIndexWithFlag) {
+        Mac mac = srtcpHmac();
+        mac.update(rtcpPacket);
+        mac.update((byte) ((srtcpIndexWithFlag >>> 24) & 0xFF));
+        mac.update((byte) ((srtcpIndexWithFlag >>> 16) & 0xFF));
+        mac.update((byte) ((srtcpIndexWithFlag >>> 8) & 0xFF));
+        mac.update((byte) (srtcpIndexWithFlag & 0xFF));
+        byte[] full = mac.doFinal();
+        return Arrays.copyOf(full, AUTH_TAG_LENGTH);
+    }
+
+    public boolean verifyRtcpAuthTag(byte[] rtcpPacket, int srtcpIndexWithFlag, byte[] receivedTag) {
+        if (receivedTag == null || receivedTag.length != AUTH_TAG_LENGTH) {
+            return false;
+        }
+        byte[] expected = authenticateRtcp(rtcpPacket, srtcpIndexWithFlag);
         int diff = 0;
         for (int i = 0; i < AUTH_TAG_LENGTH; i++) {
             diff |= (expected[i] ^ receivedTag[i]);
@@ -172,6 +228,22 @@ public final class SrtpCryptoContext {
         return iv;
     }
 
+    private static byte[] createRtcpIv(byte[] saltKey, long index, int ssrc) {
+        byte[] iv = new byte[16];
+        iv[4] = (byte) ((ssrc >>> 24) & 0xFF);
+        iv[5] = (byte) ((ssrc >>> 16) & 0xFF);
+        iv[6] = (byte) ((ssrc >>> 8) & 0xFF);
+        iv[7] = (byte) (ssrc & 0xFF);
+        iv[10] ^= (byte) ((index >>> 24) & 0xFF);
+        iv[11] ^= (byte) ((index >>> 16) & 0xFF);
+        iv[12] ^= (byte) ((index >>> 8) & 0xFF);
+        iv[13] ^= (byte) (index & 0xFF);
+        for (int i = 0; i < MASTER_SALT_LEN; i++) {
+            iv[i] ^= saltKey[i];
+        }
+        return iv;
+    }
+
     private void xorAesCtr(byte[] packet, int offset, int length, byte[] iv, Cipher cipher) {
         if (length <= 0) {
             return;
@@ -220,6 +292,37 @@ public final class SrtpCryptoContext {
             return m;
         } catch (GeneralSecurityException e) {
             throw new IllegalStateException("failed to init SRTP HMAC", e);
+        }
+    }
+
+    private Cipher srtcpCipher() {
+        Cipher c = srtcpAesCipher.get();
+        if (c != null) {
+            return c;
+        }
+        try {
+            c = Cipher.getInstance(AES_ECB_NO_PADDING);
+            c.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(srtcpCipherKey, "AES"));
+            srtcpAesCipher.set(c);
+            return c;
+        } catch (GeneralSecurityException e) {
+            throw new IllegalStateException("failed to init SRTCP AES cipher", e);
+        }
+    }
+
+    private Mac srtcpHmac() {
+        Mac m = srtcpHmac.get();
+        if (m != null) {
+            m.reset();
+            return m;
+        }
+        try {
+            m = Mac.getInstance(HMAC_SHA1);
+            m.init(new SecretKeySpec(srtcpAuthKey, HMAC_SHA1));
+            srtcpHmac.set(m);
+            return m;
+        } catch (GeneralSecurityException e) {
+            throw new IllegalStateException("failed to init SRTCP HMAC", e);
         }
     }
 

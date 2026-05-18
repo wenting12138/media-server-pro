@@ -14,6 +14,7 @@ public class RTCRtpSender {
     private volatile MediaStreamTrack track;
     private final long ssrc;
     private volatile SrtpCryptoContext srtpContext;
+    private volatile RtcpFeedbackListener feedbackListener;
 
     public RTCRtpSender(MediaStreamTrack track, long ssrc) {
         this.track = track;
@@ -25,6 +26,8 @@ public class RTCRtpSender {
 
     public SrtpCryptoContext getSrtpContext() { return srtpContext; }
     public void setSrtpContext(SrtpCryptoContext ctx) { this.srtpContext = ctx; }
+    public RtcpFeedbackListener getFeedbackListener() { return feedbackListener; }
+    public void setFeedbackListener(RtcpFeedbackListener feedbackListener) { this.feedbackListener = feedbackListener; }
 
     /**
      * Replace the track being sent.
