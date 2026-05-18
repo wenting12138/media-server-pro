@@ -5,6 +5,7 @@ import com.wenting.mediaserver.protocol.webrtc.core.ice.IceCandidate;
 import com.wenting.mediaserver.protocol.webrtc.core.sctp.DataChannel;
 import com.wenting.mediaserver.protocol.webrtc.core.sdp.SdpDescription;
 import com.wenting.mediaserver.protocol.webrtc.core.sdp.SdpParser;
+import com.wenting.mediaserver.protocol.webrtc.util.WebrtcSdpUtil;
 import org.junit.Test;
 
 import java.nio.charset.StandardCharsets;
@@ -88,7 +89,7 @@ public class RTCPeerConnectionTest {
     @Test
     public void testParseCandidateFromSdp() {
         String sdpAttr = "a=candidate:1 1 UDP 2130706431 127.0.0.1 54321 typ host";
-        IceCandidate candidate = RTCPeerConnection.parseCandidate(sdpAttr, "ufrag");
+        IceCandidate candidate = WebrtcSdpUtil.parseCandidate(sdpAttr, "ufrag");
         assertNotNull(candidate);
         assertEquals("1", candidate.getFoundation());
         assertEquals(1, candidate.getComponentId());
@@ -99,7 +100,7 @@ public class RTCPeerConnectionTest {
     @Test
     public void testParseCandidateWithoutPrefix() {
         String candidateStr = "candidate:1 1 UDP 2130706431 127.0.0.1 12345 typ host";
-        IceCandidate candidate = RTCPeerConnection.parseCandidate(candidateStr, "ufrag");
+        IceCandidate candidate = WebrtcSdpUtil.parseCandidate(candidateStr, "ufrag");
         assertNotNull(candidate);
         assertEquals(12345, candidate.getAddress().getPort());
     }

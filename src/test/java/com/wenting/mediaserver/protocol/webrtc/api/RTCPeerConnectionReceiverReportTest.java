@@ -4,6 +4,8 @@ import com.wenting.mediaserver.core.codec.rtcp.RtcpReceiverReportPacket;
 import com.wenting.mediaserver.core.codec.rtcp.RtcpReportBlock;
 import com.wenting.mediaserver.core.codec.rtp.RtpPacketParser;
 import com.wenting.mediaserver.core.codec.rtp.RtpParseResult;
+import com.wenting.mediaserver.protocol.webrtc.util.ReportPacketUtil;
+import com.wenting.mediaserver.protocol.webrtc.util.WebrtcPacketUtil;
 import org.junit.jupiter.api.Test;
 
 import java.util.Collections;
@@ -25,7 +27,7 @@ class RTCPeerConnectionReceiverReportTest {
                 0x0D0E0F10L
         );
 
-        byte[] packet = RTCPeerConnection.encodeReceiverReportPacket(
+        byte[] packet = ReportPacketUtil.encodeReceiverReportPacket(
                 0x55667788L,
                 Collections.singletonList(reportBlock)
         );
