@@ -1,5 +1,6 @@
 package com.wenting.mediaserver.core.registry;
 
+import com.wenting.mediaserver.core.enums.StreamProtocol;
 import com.wenting.mediaserver.core.enums.publish.CodecType;
 import com.wenting.mediaserver.core.enums.publish.TrackType;
 import com.wenting.mediaserver.core.track.ITrack;
@@ -104,8 +105,15 @@ public final class StreamRegistry {
         if (app == null || app.trim().isEmpty() || stream == null || stream.trim().isEmpty()) {
             return null;
         }
+        IPublishedStream source = findPublishedStreamByPath(app, stream);
+        if (source == null) {
+            return null;
+        }
+        if (source.getProtocol() == StreamProtocol.WEBRTC) {
+            return source;
+        }
         IPublishedStream derived = findPublishedStreamByPath(app, stream + webRtcPlaybackSuffix);
-        return derived == null ? findPublishedStreamByPath(app, stream) : derived;
+        return derived == null ? source : derived;
     }
 
     public IPublishedStream findPublishedStreamForRtspPlayback(String app, String stream) {

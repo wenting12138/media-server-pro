@@ -1,10 +1,12 @@
 package com.wenting.mediaserver.protocol.webrtc;
 
 import com.wenting.mediaserver.core.enums.publish.CodecType;
+import com.wenting.mediaserver.core.enums.publish.MediaPacketTransport;
 import com.wenting.mediaserver.core.enums.publish.TrackType;
 import com.wenting.mediaserver.core.enums.StreamProtocol;
 import com.wenting.mediaserver.core.model.StreamKey;
 import com.wenting.mediaserver.core.publish.InboundMediaFrame;
+import com.wenting.mediaserver.core.publish.InboundRtpPacket;
 import com.wenting.mediaserver.core.publish.MediaSubscriberAdapter;
 import com.wenting.mediaserver.core.publish.DefaultPublishedStream;
 import com.wenting.mediaserver.protocol.webrtc.api.MediaStreamTrack;
@@ -349,6 +351,37 @@ public class ServerWebRtcPeerSessionTest {
         }
     }
 
+    @Test
+    public void shouldRelayWebRtcSourceH264RtpPacketDirectly() throws Exception {
+        RecordingDatagramIoSender sender = new RecordingDatagramIoSender();
+        SessionDatagramIo datagramIo = new SessionDatagramIo(new InetSocketAddress("127.0.0.1", 18081), sender);
+        RTCPeerConnection peerConnection = new RTCPeerConnection(datagramIo);
+        RTCRtpTransceiver transceiver = peerConnection.addTrack(new MediaStreamTrack(MediaStreamTrack.Kind.VIDEO, "video"));
+        transceiver.setNegotiatedPayloadType(Integer.valueOf(96));
+        transceiver.setNegotiatedClockRate(Integer.valueOf(90000));
+        transceiver.setNegotiatedCodecType(CodecType.H264);
+        byte[] keyMaterial = keyMaterial();
+        transceiver.getSender().setSrtpContext(SrtpCryptoContext.fromKeyMaterial(keyMaterial, true));
+        StreamKey streamKey = new StreamKey(StreamProtocol.WEBRTC, "live", "browser-cam");
+        ServerWebRtcPeerSession session = new ServerWebRtcPeerSession("sess-8", streamKey, peerConnection, datagramIo);
+        InetSocketAddress remoteAddress = new InetSocketAddress("127.0.0.1", 50006);
+
+        try {
+            session.receive(new byte[0], remoteAddress);
+            session.writeMediaPacket(webRtcVideoPacket(streamKey, 7, 123456L, true, new byte[]{0x65, 0x11, 0x22, 0x33}));
+
+            assertEquals(1, sender.sentPackets.size());
+            SrtpTransform decrypt = new SrtpTransform(SrtpCryptoContext.fromKeyMaterial(keyMaterial, true), transceiver.getSender().getSsrc());
+            RtpPacket relayedPacket = decrypt.unprotect(sender.sentPackets.get(0).data);
+            assertEquals(96, relayedPacket.getPayloadType());
+            assertEquals(123456L, relayedPacket.getTimestamp());
+            assertTrue(relayedPacket.getMarker());
+            assertArrayEquals(new byte[]{0x65, 0x11, 0x22, 0x33}, relayedPacket.getPayload());
+        } finally {
+            session.close();
+        }
+    }
+
     private static InboundMediaFrame h264ConfigFrame(StreamKey streamKey) {
         return new InboundMediaFrame(
                 StreamProtocol.RTMP,
@@ -399,6 +432,50 @@ public class ServerWebRtcPeerSessionTest {
             keyMaterial[i] = (byte) (i + 1);
         }
         return keyMaterial;
+    }
+
+    private static InboundRtpPacket webRtcVideoPacket(
+            StreamKey streamKey,
+            int sequenceNumber,
+            long timestamp,
+            boolean marker,
+            byte[] payload
+    ) {
+        byte[] packet = new byte[12 + payload.length];
+        packet[0] = (byte) 0x80;
+        packet[1] = (byte) ((marker ? 0x80 : 0x00) | 96);
+        packet[2] = (byte) ((sequenceNumber >> 8) & 0xFF);
+        packet[3] = (byte) (sequenceNumber & 0xFF);
+        packet[4] = (byte) ((timestamp >> 24) & 0xFF);
+        packet[5] = (byte) ((timestamp >> 16) & 0xFF);
+        packet[6] = (byte) ((timestamp >> 8) & 0xFF);
+        packet[7] = (byte) (timestamp & 0xFF);
+        packet[8] = 0x01;
+        packet[9] = 0x02;
+        packet[10] = 0x03;
+        packet[11] = 0x04;
+        System.arraycopy(payload, 0, packet, 12, payload.length);
+        return new InboundRtpPacket(
+                new InboundMediaFrame(
+                        StreamProtocol.WEBRTC,
+                        TrackType.VIDEO,
+                        CodecType.H264,
+                        "publisher",
+                        streamKey,
+                        "video-0",
+                        null,
+                        null,
+                        false,
+                        false,
+                        null,
+                        packet
+                ),
+                90000,
+                false,
+                MediaPacketTransport.UDP,
+                Integer.valueOf(18081),
+                null
+        );
     }
 
     private static final class RecordingDatagramIoSender implements DatagramIoSender {

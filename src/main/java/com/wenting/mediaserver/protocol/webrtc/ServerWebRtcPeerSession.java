@@ -1,5 +1,9 @@
 package com.wenting.mediaserver.protocol.webrtc;
 
+import com.wenting.mediaserver.core.codec.rtp.RtpPacketHeader;
+import com.wenting.mediaserver.core.codec.rtp.RtpPacketParser;
+import com.wenting.mediaserver.core.codec.rtp.RtpParseResult;
+import com.wenting.mediaserver.core.enums.StreamProtocol;
 import com.wenting.mediaserver.core.enums.publish.CodecType;
 import com.wenting.mediaserver.core.enums.publish.TrackType;
 import com.wenting.mediaserver.core.model.StreamKey;
@@ -50,6 +54,7 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
     private final SessionDatagramIo datagramIo;
     private final MediaSubscriberAdapter subscriberAdapter;
     private final RtspFrameToRtpPacketizer frameToRtpPacketizer = new RtspFrameToRtpPacketizer();
+    private final RtpPacketParser rtpPacketParser = new RtpPacketParser();
     private final Map<String, InboundMediaFrame> latestConfigFramesByTrackId = new ConcurrentHashMap<String, InboundMediaFrame>();
     private final Map<String, RtpSendTrackState> rtpSendStatesByTrackId = new ConcurrentHashMap<String, RtpSendTrackState>();
     private final Map<String, Boolean> startedTracksByTrackId = new ConcurrentHashMap<String, Boolean>();
@@ -121,6 +126,10 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
 
     public void writeMediaPacket(InboundRtpPacket packet) {
         if (packet == null || packet.rtcp()) {
+            return;
+        }
+        if (canRelaySourceRtpPacket(packet)) {
+            relaySourceRtpPacket(packet);
             return;
         }
         writeInboundFrame(packet.frame());
@@ -272,6 +281,57 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
             });
         }
         rememberReplayPackets(frame, sentPackets);
+    }
+
+    private boolean canRelaySourceRtpPacket(InboundRtpPacket packet) {
+        InboundMediaFrame frame = packet == null ? null : packet.frame();
+        return frame != null
+                && frame.sourceProtocol() == StreamProtocol.WEBRTC
+                && frame.trackType() == TrackType.VIDEO
+                && frame.codecType() == CodecType.H264;
+    }
+
+    private void relaySourceRtpPacket(InboundRtpPacket packet) {
+        InboundMediaFrame frame = packet.frame();
+        RTCRtpTransceiver transceiver = findSendTransceiver(frame);
+        InetSocketAddress target = remoteAddress;
+        if (transceiver == null || target == null) {
+            return;
+        }
+        bindFeedbackListenerIfNeeded(frame, transceiver);
+        RtpParseResult parseResult = rtpPacketParser.parse(frame.payload());
+        RtpPacketHeader header = parseResult == null ? null : parseResult.rtpHeader();
+        if (header == null || header.payloadLength() <= 0) {
+            logDropOnce(normalizeTrackId(frame.trackId()), "invalid-source-rtp",
+                    "WebRTC direct RTP relay ignored invalid packet session={} stream={} track={} bytes={}",
+                    sessionId, streamKey, normalizeTrackId(frame.trackId()), frame.payloadLength());
+            return;
+        }
+        RtpSendTrackState sendState = sendState(frame.trackId(), transceiver.getSender().getSsrc());
+        int payloadType = resolvePayloadType(transceiver, frame.codecType());
+        byte[] payload = Arrays.copyOfRange(frame.payload(), header.payloadOffset(), header.payloadOffset() + header.payloadLength());
+        RtpPacket rtpPacket = new RtpPacket(
+                2,
+                false,
+                false,
+                0,
+                header.marker(),
+                payloadType,
+                sendState.nextSequenceNumber(),
+                header.timestamp(),
+                transceiver.getSender().getSsrc(),
+                null,
+                payload
+        );
+        byte[] srtpPacket = new SrtpTransform(transceiver.getSender().getSrtpContext(), transceiver.getSender().getSsrc())
+                .protect(rtpPacket);
+        cacheSentVideoPacket(frame, rtpPacket.getSequenceNumber(), srtpPacket);
+        logFirstSrtpPacket(frame, payloadType, packet.clockRate(), target, srtpPacket.length, header.marker());
+        datagramIo.send(srtpPacket, target).exceptionally(ex -> {
+            log.warn("Failed to relay WebRTC source RTP packet session={} stream={} target={}",
+                    sessionId, streamKey, target, ex);
+            return null;
+        });
     }
 
     private void logFirstSrtpPacket(InboundMediaFrame frame, int payloadType, int clockRate, InetSocketAddress target, int bytes, boolean marker) {
