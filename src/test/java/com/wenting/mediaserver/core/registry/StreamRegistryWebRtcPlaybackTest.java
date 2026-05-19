@@ -38,6 +38,58 @@ final class StreamRegistryWebRtcPlaybackTest {
     }
 
     @Test
+    void legacyPlaybackShouldPreferDerivedStreamForWebRtcSourceAndHlsAudioSidecar() {
+        StreamRegistry registry = new StreamRegistry();
+        StreamTransformOrchestrator orchestrator = new WebRtcPlaybackStreamTransformOrchestrator(
+                registry,
+                registry.webRtcPlaybackSuffix()
+        );
+        registry.setStreamTransformOrchestrator(orchestrator);
+        try {
+            StreamKey sourceKey = new StreamKey(StreamProtocol.WEBRTC, "live", "browser01");
+            IPublishedStream sourceStream = new DefaultPublishedStream(sourceKey);
+
+            registry.registerPublishedStream(sourceKey, sourceStream);
+
+            IPublishedStream derived = registry.findPublishedStreamByPath("live", "browser01__webrtc");
+            Assertions.assertNotNull(derived);
+            Assertions.assertSame(derived, registry.findPublishedStreamForRtspPlayback("live", "browser01"));
+            Assertions.assertSame(derived, registry.findPublishedStreamForRtmpPlayback("live", "browser01"));
+            Assertions.assertSame(derived, registry.findPublishedStreamForHttpFlvPlayback("live", "browser01"));
+            Assertions.assertSame(sourceStream, registry.findPublishedStreamForHlsPlayback("live", "browser01"));
+            IPublishedStream hlsAudioDerivedByPath = registry.findPublishedStreamByPath("live", "browser01__hls");
+            IPublishedStream hlsAudioDerived = registry.findPublishedStreamForHlsAudioPlayback("live", "browser01");
+            Assertions.assertNotNull(hlsAudioDerivedByPath);
+            Assertions.assertSame(hlsAudioDerivedByPath, hlsAudioDerived);
+        } finally {
+            orchestrator.close();
+        }
+    }
+
+    @Test
+    void legacyPlaybackShouldKeepSourceStreamForNonWebRtcSource() {
+        StreamRegistry registry = new StreamRegistry();
+        StreamTransformOrchestrator orchestrator = new WebRtcPlaybackStreamTransformOrchestrator(
+                registry,
+                registry.webRtcPlaybackSuffix()
+        );
+        registry.setStreamTransformOrchestrator(orchestrator);
+        try {
+            StreamKey sourceKey = new StreamKey(StreamProtocol.RTMP, "live", "camera");
+            IPublishedStream sourceStream = new DefaultPublishedStream(sourceKey);
+
+            registry.registerPublishedStream(sourceKey, sourceStream);
+
+            Assertions.assertSame(sourceStream, registry.findPublishedStreamForRtspPlayback("live", "camera"));
+            Assertions.assertSame(sourceStream, registry.findPublishedStreamForRtmpPlayback("live", "camera"));
+            Assertions.assertSame(sourceStream, registry.findPublishedStreamForHttpFlvPlayback("live", "camera"));
+            Assertions.assertSame(sourceStream, registry.findPublishedStreamForHlsPlayback("live", "camera"));
+        } finally {
+            orchestrator.close();
+        }
+    }
+
+    @Test
     void derivedPlaybackStreamShouldForwardKeyframeRequestToSourceOrchestrator() {
         StreamRegistry registry = new StreamRegistry();
         final StreamKey[] requestedSourceKey = new StreamKey[1];
@@ -60,6 +112,16 @@ final class StreamRegistryWebRtcPlaybackTest {
                 requestedSourceKey[0] = sourceKey;
                 requestedTrackId[0] = trackId;
                 return true;
+            }
+
+            @Override
+            public boolean managesDerivedStream(StreamKey derivedKey) {
+                return derivedKey != null && derivedKey.stream() != null && derivedKey.stream().endsWith("__webrtc");
+            }
+
+            @Override
+            public StreamKey sourceKeyForDerived(StreamKey derivedKey) {
+                return new StreamKey(derivedKey.protocol(), derivedKey.app(), "camera");
             }
 
             @Override
@@ -106,10 +168,25 @@ final class StreamRegistryWebRtcPlaybackTest {
             }
 
             @Override
-            public void setPlaybackActive(StreamKey sourceKey, boolean active) {
+            public void setPlaybackActive(StreamKey sourceKey, StreamKey derivedKey, boolean active) {
                 int index = activationCallCount[0]++;
                 activatedSourceKey[index] = sourceKey;
                 activationState[index] = active;
+            }
+
+            @Override
+            public boolean managesDerivedStream(StreamKey derivedKey) {
+                return derivedKey != null && derivedKey.stream() != null && derivedKey.stream().endsWith("__webrtc");
+            }
+
+            @Override
+            public StreamKey sourceKeyForDerived(StreamKey derivedKey) {
+                return new StreamKey(derivedKey.protocol(), derivedKey.app(), "camera");
+            }
+
+            @Override
+            public boolean shouldRequestKeyFrameOnFirstSubscriber(StreamKey derivedKey) {
+                return true;
             }
 
             @Override

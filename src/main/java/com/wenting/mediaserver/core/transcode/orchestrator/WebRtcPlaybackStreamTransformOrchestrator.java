@@ -15,10 +15,12 @@ import com.wenting.mediaserver.core.transcode.canonical.RtspRtpAudioCanonicalize
 import com.wenting.mediaserver.core.transcode.canonical.VideoFrameCanonicalizer;
 import com.wenting.mediaserver.core.transcode.engine.AudioFrameTranscoder;
 import com.wenting.mediaserver.core.transcode.engine.AudioFrameTranscoderFactory;
+import com.wenting.mediaserver.core.transcode.engine.AudioToAacTranscoder;
 import com.wenting.mediaserver.core.transcode.engine.AudioToG711UTranscoder;
 import com.wenting.mediaserver.core.transcode.engine.H264Avcc420pTranscoder;
 import com.wenting.mediaserver.core.transcode.engine.VideoFrameTranscoder;
 import com.wenting.mediaserver.core.transcode.engine.VideoFrameTranscoderFactory;
+import com.wenting.mediaserver.core.transcode.policy.HlsAudioCodecDecisionPolicy;
 import com.wenting.mediaserver.core.transcode.policy.WebRtcAudioCodecDecisionPolicy;
 import com.wenting.mediaserver.core.transcode.policy.WebRtcH264ProfileDecisionPolicy;
 import com.wenting.mediaserver.core.track.ITrack;
@@ -42,11 +44,14 @@ public final class WebRtcPlaybackStreamTransformOrchestrator implements StreamTr
     private final StreamRegistry registry;
     private final DerivedStreamPublisher publisher;
     private final String playbackSuffix;
+    private final String hlsAudioSuffix;
     private final int videoQueueSize;
     private final int audioQueueSize;
     private final Map<StreamKey, TranscodeWorker> videoWorkersBySourceKey =
             new ConcurrentHashMap<StreamKey, TranscodeWorker>();
     private final Map<StreamKey, AudioTranscodeWorker> audioWorkersBySourceKey =
+            new ConcurrentHashMap<StreamKey, AudioTranscodeWorker>();
+    private final Map<StreamKey, AudioTranscodeWorker> hlsAudioWorkersBySourceKey =
             new ConcurrentHashMap<StreamKey, AudioTranscodeWorker>();
 
     public WebRtcPlaybackStreamTransformOrchestrator(
@@ -57,6 +62,7 @@ public final class WebRtcPlaybackStreamTransformOrchestrator implements StreamTr
                 registry,
                 new DefaultDerivedStreamPublisher(registry),
                 playbackSuffix,
+                registry == null ? "__hls" : registry.hlsAudioPlaybackSuffix(),
                 DEFAULT_VIDEO_QUEUE_SIZE,
                 DEFAULT_AUDIO_QUEUE_SIZE
         );
@@ -66,6 +72,7 @@ public final class WebRtcPlaybackStreamTransformOrchestrator implements StreamTr
             StreamRegistry registry,
             DerivedStreamPublisher publisher,
             String playbackSuffix,
+            String hlsAudioSuffix,
             int videoQueueSize,
             int audioQueueSize
     ) {
@@ -74,22 +81,26 @@ public final class WebRtcPlaybackStreamTransformOrchestrator implements StreamTr
         this.playbackSuffix = playbackSuffix == null || playbackSuffix.trim().isEmpty()
                 ? "__webrtc"
                 : playbackSuffix.trim();
+        this.hlsAudioSuffix = hlsAudioSuffix == null || hlsAudioSuffix.trim().isEmpty()
+                ? "__hls"
+                : hlsAudioSuffix.trim();
         this.videoQueueSize = videoQueueSize <= 0 ? DEFAULT_VIDEO_QUEUE_SIZE : videoQueueSize;
         this.audioQueueSize = audioQueueSize <= 0 ? DEFAULT_AUDIO_QUEUE_SIZE : audioQueueSize;
     }
 
     @Override
     public void onStreamRegistered(StreamKey sourceKey) {
-        if (sourceKey == null || isDerivedStream(sourceKey)) {
+        if (sourceKey == null || managesDerivedStream(sourceKey)) {
             return;
         }
         ensureVideoWorker(sourceKey);
         ensureAudioWorker(sourceKey);
+        ensureHlsAudioWorker(sourceKey);
     }
 
     @Override
     public void onStreamRemoved(StreamKey sourceKey) {
-        if (sourceKey == null || isDerivedStream(sourceKey)) {
+        if (sourceKey == null || managesDerivedStream(sourceKey)) {
             return;
         }
         TranscodeWorker videoWorker = videoWorkersBySourceKey.remove(sourceKey);
@@ -99,6 +110,10 @@ public final class WebRtcPlaybackStreamTransformOrchestrator implements StreamTr
         AudioTranscodeWorker audioWorker = audioWorkersBySourceKey.remove(sourceKey);
         if (audioWorker != null) {
             audioWorker.stop();
+        }
+        AudioTranscodeWorker hlsAudioWorker = hlsAudioWorkersBySourceKey.remove(sourceKey);
+        if (hlsAudioWorker != null) {
+            hlsAudioWorker.stop();
         }
     }
 
@@ -112,6 +127,10 @@ public final class WebRtcPlaybackStreamTransformOrchestrator implements StreamTr
                 AudioTranscodeWorker worker = ensureAudioWorker(frame.streamKey());
                 if (worker != null) {
                     worker.enqueueFrame(frame);
+                }
+                AudioTranscodeWorker hlsAudioWorker = ensureHlsAudioWorker(frame.streamKey());
+                if (hlsAudioWorker != null) {
+                    hlsAudioWorker.enqueueFrame(frame);
                 }
             }
         }
@@ -134,6 +153,10 @@ public final class WebRtcPlaybackStreamTransformOrchestrator implements StreamTr
                 AudioTranscodeWorker worker = ensureAudioWorker(frame.streamKey());
                 if (worker != null) {
                     worker.enqueuePacket(packet, resolveTrack(frame));
+                }
+                AudioTranscodeWorker hlsAudioWorker = ensureHlsAudioWorker(frame.streamKey());
+                if (hlsAudioWorker != null) {
+                    hlsAudioWorker.enqueuePacket(packet, resolveTrack(frame));
                 }
             }
             return;
@@ -159,11 +182,17 @@ public final class WebRtcPlaybackStreamTransformOrchestrator implements StreamTr
             }
         }
         audioWorkersBySourceKey.clear();
+        for (AudioTranscodeWorker worker : hlsAudioWorkersBySourceKey.values()) {
+            if (worker != null) {
+                worker.stop();
+            }
+        }
+        hlsAudioWorkersBySourceKey.clear();
     }
 
     @Override
     public boolean requestKeyFrame(StreamKey sourceKey, String trackId) {
-        if (sourceKey == null || isDerivedStream(sourceKey)) {
+        if (sourceKey == null || managesDerivedStream(sourceKey)) {
             return false;
         }
         TranscodeWorker worker = ensureVideoWorker(sourceKey);
@@ -189,21 +218,56 @@ public final class WebRtcPlaybackStreamTransformOrchestrator implements StreamTr
 
     @Override
     public void setPlaybackActive(StreamKey sourceKey, boolean active) {
-        if (sourceKey == null || isDerivedStream(sourceKey)) {
+        setPlaybackActive(sourceKey, derivedKey(sourceKey), active);
+    }
+
+    @Override
+    public void setPlaybackActive(StreamKey sourceKey, StreamKey derivedKey, boolean active) {
+        if (sourceKey == null || derivedKey == null || managesDerivedStream(sourceKey)) {
             return;
         }
-        TranscodeWorker videoWorker = ensureVideoWorker(sourceKey);
-        if (videoWorker != null) {
-            videoWorker.setPlaybackActive(active);
+        if (isWebRtcDerived(derivedKey)) {
+            TranscodeWorker videoWorker = ensureVideoWorker(sourceKey);
+            if (videoWorker != null) {
+                videoWorker.setPlaybackActive(active);
+            }
+            AudioTranscodeWorker audioWorker = ensureAudioWorker(sourceKey);
+            if (audioWorker != null) {
+                audioWorker.setPlaybackActive(active);
+            }
+            return;
         }
-        AudioTranscodeWorker audioWorker = ensureAudioWorker(sourceKey);
-        if (audioWorker != null) {
-            audioWorker.setPlaybackActive(active);
+        if (isHlsAudioDerived(derivedKey)) {
+            AudioTranscodeWorker audioWorker = ensureHlsAudioWorker(sourceKey);
+            if (audioWorker != null) {
+                audioWorker.setPlaybackActive(active);
+            }
         }
     }
 
+    @Override
+    public boolean managesDerivedStream(StreamKey derivedKey) {
+        return isWebRtcDerived(derivedKey) || isHlsAudioDerived(derivedKey);
+    }
+
+    @Override
+    public StreamKey sourceKeyForDerived(StreamKey derivedKey) {
+        if (isWebRtcDerived(derivedKey)) {
+            return stripSuffix(derivedKey, playbackSuffix);
+        }
+        if (isHlsAudioDerived(derivedKey)) {
+            return stripSuffix(derivedKey, hlsAudioSuffix);
+        }
+        return derivedKey;
+    }
+
+    @Override
+    public boolean shouldRequestKeyFrameOnFirstSubscriber(StreamKey derivedKey) {
+        return isWebRtcDerived(derivedKey);
+    }
+
     private TranscodeWorker ensureVideoWorker(StreamKey sourceKey) {
-        if (sourceKey == null || isDerivedStream(sourceKey)) {
+        if (sourceKey == null || managesDerivedStream(sourceKey)) {
             return null;
         }
         TranscodeWorker worker = videoWorkersBySourceKey.get(sourceKey);
@@ -240,7 +304,7 @@ public final class WebRtcPlaybackStreamTransformOrchestrator implements StreamTr
     }
 
     private AudioTranscodeWorker ensureAudioWorker(StreamKey sourceKey) {
-        if (sourceKey == null || isDerivedStream(sourceKey)) {
+        if (sourceKey == null || managesDerivedStream(sourceKey)) {
             return null;
         }
         AudioTranscodeWorker worker = audioWorkersBySourceKey.get(sourceKey);
@@ -273,6 +337,43 @@ public final class WebRtcPlaybackStreamTransformOrchestrator implements StreamTr
             return existing;
         }
         log.debug("Created audio transform worker source={} derived={}", sourceKey, derivedKey);
+        return created;
+    }
+
+    private AudioTranscodeWorker ensureHlsAudioWorker(StreamKey sourceKey) {
+        if (sourceKey == null || managesDerivedStream(sourceKey) || sourceKey.protocol() != StreamProtocol.WEBRTC) {
+            return null;
+        }
+        AudioTranscodeWorker worker = hlsAudioWorkersBySourceKey.get(sourceKey);
+        if (worker != null) {
+            return worker;
+        }
+        StreamKey derivedKey = hlsAudioDerivedKey(sourceKey);
+        AudioFrameCanonicalizer canonicalizer = buildAudioCanonicalizer(sourceKey);
+        if (canonicalizer == null) {
+            return null;
+        }
+        AudioFrameTranscoderFactory transcoderFactory = new AudioFrameTranscoderFactory() {
+            @Override
+            public AudioFrameTranscoder create() {
+                return new AudioToAacTranscoder();
+            }
+        };
+        AudioTranscodeWorker created = AudioTranscodeWorker.start(
+                sourceKey,
+                derivedKey,
+                publisher,
+                canonicalizer,
+                transcoderFactory,
+                new HlsAudioCodecDecisionPolicy(),
+                audioQueueSize
+        );
+        AudioTranscodeWorker existing = hlsAudioWorkersBySourceKey.putIfAbsent(sourceKey, created);
+        if (existing != null) {
+            created.stop();
+            return existing;
+        }
+        log.debug("Created HLS audio transform worker source={} derived={}", sourceKey, derivedKey);
         return created;
     }
 
@@ -309,12 +410,28 @@ public final class WebRtcPlaybackStreamTransformOrchestrator implements StreamTr
         return session == null ? null : session.findTrack(frame.trackId());
     }
 
-    private boolean isDerivedStream(StreamKey key) {
+    private StreamKey derivedKey(StreamKey sourceKey) {
+        return new StreamKey(sourceKey.protocol(), sourceKey.app(), sourceKey.stream() + playbackSuffix);
+    }
+
+    private StreamKey hlsAudioDerivedKey(StreamKey sourceKey) {
+        return new StreamKey(sourceKey.protocol(), sourceKey.app(), sourceKey.stream() + hlsAudioSuffix);
+    }
+
+    private boolean isWebRtcDerived(StreamKey key) {
         return key != null && key.stream() != null && key.stream().endsWith(playbackSuffix);
     }
 
-    private StreamKey derivedKey(StreamKey sourceKey) {
-        return new StreamKey(sourceKey.protocol(), sourceKey.app(), sourceKey.stream() + playbackSuffix);
+    private boolean isHlsAudioDerived(StreamKey key) {
+        return key != null && key.stream() != null && key.stream().endsWith(hlsAudioSuffix);
+    }
+
+    private StreamKey stripSuffix(StreamKey derivedKey, String suffix) {
+        if (derivedKey == null || derivedKey.stream() == null || suffix == null || !derivedKey.stream().endsWith(suffix)) {
+            return derivedKey;
+        }
+        String sourceStream = derivedKey.stream().substring(0, derivedKey.stream().length() - suffix.length());
+        return new StreamKey(derivedKey.protocol(), derivedKey.app(), sourceStream);
     }
 
     private boolean isSupportedAudioFrame(InboundMediaFrame frame) {

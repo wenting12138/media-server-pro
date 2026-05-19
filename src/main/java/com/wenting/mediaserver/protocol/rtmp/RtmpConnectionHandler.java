@@ -373,6 +373,12 @@ public final class RtmpConnectionHandler extends SimpleChannelInboundHandler<Rtm
         if (streamRegistry == null) {
             return null;
         }
+        if (session().isSubscriber()) {
+            return streamRegistry.findPublishedStreamForRtmpPlayback(
+                    session().streamKey().app(),
+                    session().streamKey().stream()
+            );
+        }
         IPublishedStream stream = streamRegistry.findPublishedStream(session().streamKey());
         if (stream != null) {
             return stream;

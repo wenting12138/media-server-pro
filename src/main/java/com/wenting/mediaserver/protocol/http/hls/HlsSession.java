@@ -64,7 +64,7 @@ final class HlsSession implements MediaSubscriberAdapter {
     public synchronized void writeInboundFrame(InboundMediaFrame frame) {
         if (frame == null || frame.configFrame()) {
             currentMuxer.onFrame(frame);
-            refreshCurrentSnapshot(frame == null ? 0L : frame.dtsMillis());
+            refreshCurrentSnapshot(frame == null ? Long.valueOf(0L) : frame.dtsMillis());
             return;
         }
         maybeRotateSegment(frame);

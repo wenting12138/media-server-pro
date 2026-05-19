@@ -44,7 +44,7 @@ public final class HttpFlvHandler extends SimpleChannelInboundHandler<FullHttpRe
     @Override
     public void handleRequest(ChannelHandlerContext ctx, FullHttpRequest req) {
         HttpFlvPath flvPath = parseFlvPath(req.uri());
-        IPublishedStream stream = streamRegistry.findPublishedStreamByPath(flvPath.app(), flvPath.stream());
+        IPublishedStream stream = streamRegistry.findPublishedStreamForHttpFlvPlayback(flvPath.app(), flvPath.stream());
         if (stream == null) {
             writeError(ctx, HttpResponseStatus.NOT_FOUND, "stream not found");
             return;

@@ -52,6 +52,19 @@ Important limitation: RTMP audio is typically `AAC`, so the current WebRTC audio
 
 Do not change audio SDP negotiation back to `opus` unless the server can actually packetize and send Opus frames end-to-end.
 
+## WebRTC Source Downstream Strategy
+For streams published from `protocol.webrtc`, treat the original stream as ingest-oriented and prefer protocol-specific playback variants:
+
+- `RTSP` playback: prefer `stream__webrtc`
+- `RTMP` playback: prefer `stream__webrtc`
+- `HTTP-FLV` playback: prefer `stream__webrtc`
+- `HLS` playback: keep subscribing to the original source stream for video, and attach `stream__hls` as an audio sidecar when present
+
+Current implication:
+- WebRTC-published `Opus` audio is transcoded into shared `G711U` on `stream__webrtc`
+- `RTSP`/`RTMP`/`HTTP-FLV` can use that derived `G711U` audio path
+- `HLS` uses a dedicated `stream__hls` audio sidecar that transcodes WebRTC-source audio into `AAC`, so TS muxing remains `AAC`-only and does not need to understand `Opus` or `G711`
+
 ## WebRTC Transcode Architecture
 The reusable playback transform pipeline lives under `src/main/java/com/wenting/mediaserver/core/transcode` and is organized as:
 

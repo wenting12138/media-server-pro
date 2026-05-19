@@ -48,7 +48,7 @@ public final class HlsHandler extends SimpleChannelInboundHandler<FullHttpReques
     @Override
     public void handleRequest(ChannelHandlerContext ctx, FullHttpRequest req) throws Exception {
         HlsPath hlsPath = parse(req.uri());
-        IPublishedStream stream = streamRegistry.findPublishedStreamByPath(hlsPath.app(), hlsPath.stream());
+        IPublishedStream stream = streamRegistry.findPublishedStreamForHlsPlayback(hlsPath.app(), hlsPath.stream());
         if (stream == null) {
             writeError(ctx, HttpResponseStatus.NOT_FOUND, "stream not found");
             return;

@@ -25,6 +25,22 @@ public interface StreamTransformOrchestrator extends AutoCloseable {
     default void setPlaybackActive(StreamKey sourceKey, boolean active) {
     }
 
+    default void setPlaybackActive(StreamKey sourceKey, StreamKey derivedKey, boolean active) {
+        setPlaybackActive(sourceKey, active);
+    }
+
+    default boolean managesDerivedStream(StreamKey derivedKey) {
+        return false;
+    }
+
+    default StreamKey sourceKeyForDerived(StreamKey derivedKey) {
+        return derivedKey;
+    }
+
+    default boolean shouldRequestKeyFrameOnFirstSubscriber(StreamKey derivedKey) {
+        return false;
+    }
+
     @Override
     void close();
 }

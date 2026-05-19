@@ -9,6 +9,8 @@ import com.wenting.mediaserver.core.publish.DefaultPublishedStream;
 import com.wenting.mediaserver.core.publish.InboundMediaFrame;
 import com.wenting.mediaserver.core.publish.InboundRtpPacket;
 import com.wenting.mediaserver.core.registry.StreamRegistry;
+import com.wenting.mediaserver.core.transcode.orchestrator.StreamTransformOrchestrator;
+import com.wenting.mediaserver.core.transcode.orchestrator.WebRtcPlaybackStreamTransformOrchestrator;
 import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.handler.codec.http.DefaultFullHttpRequest;
 import io.netty.handler.codec.http.FullHttpResponse;
@@ -18,6 +20,7 @@ import io.netty.handler.codec.http.HttpVersion;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -354,6 +357,89 @@ class HlsHandlerTest {
         sessionManager.close();
     }
 
+    @Test
+    void shouldMuxAacAudioFromWebRtcHlsDerivedSidecar() throws Exception {
+        StreamRegistry registry = new StreamRegistry();
+        StreamTransformOrchestrator orchestrator = new WebRtcPlaybackStreamTransformOrchestrator(
+                registry,
+                registry.webRtcPlaybackSuffix()
+        );
+        registry.setStreamTransformOrchestrator(orchestrator);
+        try {
+            StreamKey streamKey = new StreamKey(StreamProtocol.WEBRTC, "live", "browser01");
+            DefaultPublishedStream stream = new DefaultPublishedStream(streamKey);
+            registry.registerPublishedStream(streamKey, stream);
+
+            HlsSessionManager sessionManager = new HlsSessionManager(registry);
+            EmbeddedChannel channel = new EmbeddedChannel(new HlsHandler(registry, sessionManager));
+            channel.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/hls/live/browser01/index.m3u8"));
+            FullHttpResponse playlistResponse = channel.readOutbound();
+            assertNotNull(playlistResponse);
+            assertEquals(HttpResponseStatus.OK, playlistResponse.status());
+            playlistResponse.release();
+
+            stream.onInboundRtpPacket(rtpPacket(
+                    StreamProtocol.WEBRTC,
+                    streamKey,
+                    "video-main",
+                    TrackType.VIDEO,
+                    CodecType.H264,
+                    90000,
+                    1,
+                    1000L,
+                    false,
+                    new byte[] {0x67, 0x64, 0x00, 0x1F, (byte) 0xAC, (byte) 0xD9, 0x40, 0x78}
+            ));
+            stream.onInboundRtpPacket(rtpPacket(
+                    StreamProtocol.WEBRTC,
+                    streamKey,
+                    "video-main",
+                    TrackType.VIDEO,
+                    CodecType.H264,
+                    90000,
+                    2,
+                    1000L,
+                    false,
+                    new byte[] {0x68, (byte) 0xEE, 0x3C, (byte) 0x80}
+            ));
+            stream.onInboundRtpPacket(rtpPacket(
+                    StreamProtocol.WEBRTC,
+                    streamKey,
+                    "video-main",
+                    TrackType.VIDEO,
+                    CodecType.H264,
+                    90000,
+                    3,
+                    1000L,
+                    true,
+                    new byte[] {0x65, 0x11, 0x22}
+            ));
+            for (int i = 0; i < 6; i++) {
+                stream.onInboundRtpPacket(rtpPacket(
+                        StreamProtocol.WEBRTC,
+                        streamKey,
+                        "audio-main",
+                        TrackType.AUDIO,
+                        CodecType.G711U,
+                        8000,
+                        10 + i,
+                        160L * (i + 1L),
+                        true,
+                        mulawFrame(160, (byte) (0x10 + i))
+                ));
+            }
+
+            byte[] segmentBytes = waitForHlsSegmentWithAudio(channel, "/hls/live/browser01/seg-00000.ts");
+            assertNotNull(segmentBytes);
+            assertEquals(0x47, segmentBytes[0] & 0xFF);
+
+            channel.finishAndReleaseAll();
+            sessionManager.close();
+        } finally {
+            orchestrator.close();
+        }
+    }
+
     private static InboundMediaFrame frame(
             StreamKey streamKey,
             String trackId,
@@ -382,6 +468,7 @@ class HlsHandlerTest {
     }
 
     private static InboundRtpPacket rtpPacket(
+            StreamProtocol sourceProtocol,
             StreamKey streamKey,
             String trackId,
             TrackType trackType,
@@ -394,7 +481,7 @@ class HlsHandlerTest {
     ) {
         byte[] packet = new byte[12 + rtpPayload.length];
         packet[0] = (byte) 0x80;
-        packet[1] = (byte) (marker ? 0xE0 : 0x60);
+        packet[1] = (byte) ((marker ? 0x80 : 0x00) | 96);
         packet[2] = (byte) ((sequenceNumber >> 8) & 0xFF);
         packet[3] = (byte) (sequenceNumber & 0xFF);
         packet[4] = (byte) ((timestamp >> 24) & 0xFF);
@@ -408,7 +495,7 @@ class HlsHandlerTest {
         System.arraycopy(rtpPayload, 0, packet, 12, rtpPayload.length);
         return new InboundRtpPacket(
                 new InboundMediaFrame(
-                        StreamProtocol.RTSP,
+                        sourceProtocol,
                         trackType,
                         codecType,
                         "publisher",
@@ -427,5 +514,101 @@ class HlsHandlerTest {
                 null,
                 Integer.valueOf(0)
         );
+    }
+
+    private static InboundRtpPacket rtpPacket(
+            StreamKey streamKey,
+            String trackId,
+            TrackType trackType,
+            CodecType codecType,
+            int clockRate,
+            int sequenceNumber,
+            long timestamp,
+            boolean marker,
+            byte[] rtpPayload
+    ) {
+        return rtpPacket(
+                StreamProtocol.RTSP,
+                streamKey,
+                trackId,
+                trackType,
+                codecType,
+                clockRate,
+                sequenceNumber,
+                timestamp,
+                marker,
+                rtpPayload
+        );
+    }
+
+    private static byte[] mulawFrame(int size, byte seed) {
+        byte[] payload = new byte[size];
+        Arrays.fill(payload, seed);
+        return payload;
+    }
+
+    private static byte[] waitForHlsSegment(EmbeddedChannel channel, String uri) throws Exception {
+        long deadline = System.currentTimeMillis() + 6000L;
+        while (System.currentTimeMillis() < deadline) {
+            channel.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, uri));
+            FullHttpResponse response = channel.readOutbound();
+            if (response != null) {
+                try {
+                    if (response.status().equals(HttpResponseStatus.OK) && response.content().readableBytes() > 0) {
+                        byte[] bytes = new byte[response.content().readableBytes()];
+                        response.content().getBytes(0, bytes);
+                        return bytes;
+                    }
+                } finally {
+                    response.release();
+                }
+            }
+            Thread.sleep(50L);
+        }
+        return null;
+    }
+
+    private static byte[] waitForHlsSegmentWithAudio(EmbeddedChannel channel, String uri) throws Exception {
+        long deadline = System.currentTimeMillis() + 6000L;
+        while (System.currentTimeMillis() < deadline) {
+            channel.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, uri));
+            FullHttpResponse response = channel.readOutbound();
+            byte[] bytes = null;
+            if (response != null) {
+                try {
+                    if (response.status().equals(HttpResponseStatus.OK) && response.content().readableBytes() > 0) {
+                        bytes = new byte[response.content().readableBytes()];
+                        response.content().getBytes(0, bytes);
+                    }
+                } finally {
+                    response.release();
+                }
+            }
+            if (bytes != null && (containsSubsequence(bytes, new byte[] {(byte) 0xFF, (byte) 0xF1})
+                    || containsSubsequence(bytes, new byte[] {(byte) 0xFF, (byte) 0xF9}))) {
+                return bytes;
+            }
+            Thread.sleep(50L);
+        }
+        return null;
+    }
+
+    private static boolean containsSubsequence(byte[] bytes, byte[] needle) {
+        if (bytes == null || needle == null || needle.length == 0 || bytes.length < needle.length) {
+            return false;
+        }
+        for (int i = 0; i <= bytes.length - needle.length; i++) {
+            boolean match = true;
+            for (int j = 0; j < needle.length; j++) {
+                if (bytes[i + j] != needle[j]) {
+                    match = false;
+                    break;
+                }
+            }
+            if (match) {
+                return true;
+            }
+        }
+        return false;
     }
 }

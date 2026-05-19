@@ -1,18 +1,25 @@
 package com.wenting.mediaserver.protocol.http.hls;
 
+import com.wenting.mediaserver.core.enums.publish.TrackType;
 import com.wenting.mediaserver.core.remux.rtp.AacAudioSpecificConfig;
+import com.wenting.mediaserver.core.remux.rtp.AacAudioSpecificConfigParser;
 import com.wenting.mediaserver.core.remux.rtp.AvcDecoderConfigurationRecord;
 import com.wenting.mediaserver.core.remux.rtp.AvcDecoderConfigurationRecordParser;
 import com.wenting.mediaserver.core.remux.rtp.HevcDecoderConfigurationRecord;
 import com.wenting.mediaserver.core.remux.rtp.HevcDecoderConfigurationRecordParser;
 import com.wenting.mediaserver.core.publish.InboundMediaFrame;
 import com.wenting.mediaserver.core.enums.publish.CodecType;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.List;
 
 final class TsMuxer {
+
+    private static final Logger log = LoggerFactory.getLogger(TsMuxer.class);
 
     private static final int TS_PACKET_SIZE = 188;
     private static final int PID_PAT = 0x0000;
@@ -37,6 +44,7 @@ final class TsMuxer {
     private int continuityVideo;
     private int continuityAudio;
     private boolean tablesWritten;
+    private final EnumSet<CodecType> unsupportedAudioCodecsLogged = EnumSet.noneOf(CodecType.class);
 
     void onFrame(InboundMediaFrame frame) {
         if (frame == null) {
@@ -47,22 +55,24 @@ final class TsMuxer {
             return;
         }
         ensureTables();
-        if (frame.trackType() == com.wenting.mediaserver.core.enums.publish.TrackType.VIDEO) {
-            if (frame.codecType() == com.wenting.mediaserver.core.enums.publish.CodecType.H264) {
+        if (frame.trackType() == TrackType.VIDEO) {
+            if (frame.codecType() == CodecType.H264) {
                 writeVideoFrame(frame);
                 return;
             }
-            if (frame.codecType() == com.wenting.mediaserver.core.enums.publish.CodecType.H265) {
+            if (frame.codecType() == CodecType.H265) {
                 writeVideoFrame(frame);
                 return;
             }
         }
-        if (frame.trackType() == com.wenting.mediaserver.core.enums.publish.TrackType.AUDIO) {
-            if (frame.codecType() == com.wenting.mediaserver.core.enums.publish.CodecType.AAC
-                    || frame.codecType() == com.wenting.mediaserver.core.enums.publish.CodecType.MPEG4_GENERIC
+        if (frame.trackType() == TrackType.AUDIO) {
+            if (frame.codecType() == CodecType.AAC
+                    || frame.codecType() == CodecType.MPEG4_GENERIC
             ) {
                 writeAacFrame(frame);
+                return;
             }
+            logUnsupportedAudioCodec(frame);
         }
     }
 
@@ -80,8 +90,8 @@ final class TsMuxer {
     }
 
     private void onConfigFrame(InboundMediaFrame frame) {
-        if (frame.trackType() == com.wenting.mediaserver.core.enums.publish.TrackType.VIDEO
-                && frame.codecType() == com.wenting.mediaserver.core.enums.publish.CodecType.H264) {
+        if (frame.trackType() == TrackType.VIDEO
+                && frame.codecType() == CodecType.H264) {
             videoCodecType = CodecType.H264;
             AvcDecoderConfigurationRecord record = avcConfigParser.parse(frame.payload());
             if (record != null) {
@@ -95,8 +105,8 @@ final class TsMuxer {
             }
             return;
         }
-        if (frame.trackType() == com.wenting.mediaserver.core.enums.publish.TrackType.VIDEO
-                && frame.codecType() == com.wenting.mediaserver.core.enums.publish.CodecType.H265) {
+        if (frame.trackType() == TrackType.VIDEO
+                && frame.codecType() == CodecType.H265) {
             videoCodecType = CodecType.H265;
             HevcDecoderConfigurationRecord record = hevcConfigParser.parse(frame.payload());
             if (record != null) {
@@ -113,10 +123,10 @@ final class TsMuxer {
             }
             return;
         }
-        if (frame.trackType() == com.wenting.mediaserver.core.enums.publish.TrackType.AUDIO
-                && (frame.codecType() == com.wenting.mediaserver.core.enums.publish.CodecType.AAC
-                || frame.codecType() == com.wenting.mediaserver.core.enums.publish.CodecType.MPEG4_GENERIC)) {
-            aacConfig = new com.wenting.mediaserver.core.remux.rtp.AacAudioSpecificConfigParser().parse(frame.payload());
+        if (frame.trackType() == TrackType.AUDIO
+                && (frame.codecType() == CodecType.AAC
+                || frame.codecType() == CodecType.MPEG4_GENERIC)) {
+            aacConfig = new AacAudioSpecificConfigParser().parse(frame.payload());
         }
     }
 
@@ -150,6 +160,20 @@ final class TsMuxer {
         }
         byte[] adtsFrame = buildAdtsFrame(frame.payload(), aacConfig);
         writePes(PID_AUDIO, 0xC0, to90k(frame.ptsMillis()), null, adtsFrame, false);
+    }
+
+    private void logUnsupportedAudioCodec(InboundMediaFrame frame) {
+        if (frame == null || frame.codecType() == null) {
+            return;
+        }
+        if (!unsupportedAudioCodecsLogged.add(frame.codecType())) {
+            return;
+        }
+        log.info("HLS muxer ignoring unsupported audio codec stream={} track={} codec={} sourceProtocol={}",
+                frame.streamKey(),
+                frame.trackId(),
+                frame.codecType(),
+                frame.sourceProtocol());
     }
 
     private byte[] avccToAnnexB(byte[] payload, boolean keyFrame) {

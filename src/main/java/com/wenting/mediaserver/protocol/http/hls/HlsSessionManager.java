@@ -1,5 +1,6 @@
 package com.wenting.mediaserver.protocol.http.hls;
 
+import com.wenting.mediaserver.core.enums.StreamProtocol;
 import com.wenting.mediaserver.core.model.StreamKey;
 import com.wenting.mediaserver.core.publish.IPublishedStream;
 import com.wenting.mediaserver.core.registry.StreamRegistry;
@@ -53,8 +54,24 @@ public final class HlsSessionManager implements AutoCloseable {
         HlsSession target = previous == null ? created : previous;
         if (previous == null) {
             stream.addSubscriber(created);
+            attachDerivedAudioIfPresent(created, streamKey, stream);
         }
         return target;
+    }
+
+    private void attachDerivedAudioIfPresent(HlsSession session, StreamKey streamKey, IPublishedStream sourceStream) {
+        if (session == null || streamKey == null || sourceStream == null || streamRegistry == null) {
+            return;
+        }
+        if (sourceStream.getProtocol() != StreamProtocol.WEBRTC) {
+            return;
+        }
+        IPublishedStream derivedAudioStream =
+                streamRegistry.findPublishedStreamForHlsAudioPlayback(streamKey.app(), streamKey.stream());
+        if (derivedAudioStream == null || derivedAudioStream == sourceStream) {
+            return;
+        }
+        derivedAudioStream.addSubscriber(session);
     }
 
     private void attachRtspTracksIfPresent(HlsSession session, StreamKey streamKey) {

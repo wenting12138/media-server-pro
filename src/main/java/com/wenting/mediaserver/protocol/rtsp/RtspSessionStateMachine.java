@@ -422,6 +422,12 @@ public final class RtspSessionStateMachine {
         if (!session.hasStreamKey()) {
             return null;
         }
+        if (session.isSubscriber()) {
+            return registry.findPublishedStreamForRtspPlayback(
+                    session.streamKey().app(),
+                    session.streamKey().stream()
+            );
+        }
         IPublishedStream stream = registry.findPublishedStream(session.streamKey());
         if (stream != null) {
             return stream;

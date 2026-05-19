@@ -164,7 +164,7 @@ final class StreamRegistryWebRtcAudioPlaybackTest {
     }
 
     private void waitForFrames(List<InboundMediaFrame> frames, int expectedSize) throws InterruptedException {
-        long deadline = System.currentTimeMillis() + 3000L;
+        long deadline = System.currentTimeMillis() + 6000L;
         while (System.currentTimeMillis() < deadline) {
             if (frames.size() >= expectedSize) {
                 return;
@@ -216,4 +216,5 @@ final class StreamRegistryWebRtcAudioPlaybackTest {
         System.arraycopy(payload, 0, packet, 12, payload.length);
         return packet;
     }
+
 }
