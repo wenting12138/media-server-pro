@@ -102,6 +102,7 @@ public final class WebRtcPlayHandler implements HttpRequestHandler {
             );
             installLifecycleCleanup(session);
             session.attachPublishedStream(stream);
+            requestInitialVideoKeyFrame(stream);
             sessionManager.register(session);
 
             String body = OBJECT_MAPPER.writeValueAsString(new PlayResponse(
@@ -235,6 +236,19 @@ public final class WebRtcPlayHandler implements HttpRequestHandler {
         }
         int queryIndex = uri.indexOf('?');
         return queryIndex >= 0 ? uri.substring(0, queryIndex) : uri;
+    }
+
+    private void requestInitialVideoKeyFrame(IPublishedStream stream) {
+        if (stream == null) {
+            return;
+        }
+        String trackId = stream.firstVideoTrackId();
+        if (trackId == null || trackId.trim().isEmpty()) {
+            return;
+        }
+        boolean accepted = stream.requestKeyFrame(trackId);
+        log.info("Requested initial WebRTC playback keyframe stream={} track={} accepted={}",
+                stream, trackId, accepted);
     }
 
     private static final class PlayResponse {

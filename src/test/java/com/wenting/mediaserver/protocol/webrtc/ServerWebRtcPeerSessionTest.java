@@ -382,6 +382,38 @@ public class ServerWebRtcPeerSessionTest {
         }
     }
 
+    @Test
+    public void shouldBufferWebRtcSourceRtpUntilRemoteAddressIsBound() throws Exception {
+        RecordingDatagramIoSender sender = new RecordingDatagramIoSender();
+        SessionDatagramIo datagramIo = new SessionDatagramIo(new InetSocketAddress("127.0.0.1", 18081), sender);
+        RTCPeerConnection peerConnection = new RTCPeerConnection(datagramIo);
+        RTCRtpTransceiver transceiver = peerConnection.addTrack(new MediaStreamTrack(MediaStreamTrack.Kind.VIDEO, "video"));
+        transceiver.setNegotiatedPayloadType(Integer.valueOf(96));
+        transceiver.setNegotiatedClockRate(Integer.valueOf(90000));
+        transceiver.setNegotiatedCodecType(CodecType.H264);
+        byte[] keyMaterial = keyMaterial();
+        transceiver.getSender().setSrtpContext(SrtpCryptoContext.fromKeyMaterial(keyMaterial, true));
+        StreamKey streamKey = new StreamKey(StreamProtocol.WEBRTC, "live", "browser-cam");
+        ServerWebRtcPeerSession session = new ServerWebRtcPeerSession("sess-9", streamKey, peerConnection, datagramIo);
+        InboundRtpPacket packet = webRtcVideoPacket(streamKey, 8, 123460L, true, new byte[]{0x65, 0x44, 0x55, 0x66});
+
+        try {
+            session.writeMediaPacket(packet);
+            assertEquals(0, sender.sentPackets.size());
+
+            InetSocketAddress remoteAddress = new InetSocketAddress("127.0.0.1", 50007);
+            session.receive(new byte[0], remoteAddress);
+
+            assertEquals(1, sender.sentPackets.size());
+            SrtpTransform decrypt = new SrtpTransform(SrtpCryptoContext.fromKeyMaterial(keyMaterial, true), transceiver.getSender().getSsrc());
+            RtpPacket relayedPacket = decrypt.unprotect(sender.sentPackets.get(0).data);
+            assertEquals(123460L, relayedPacket.getTimestamp());
+            assertArrayEquals(new byte[]{0x65, 0x44, 0x55, 0x66}, relayedPacket.getPayload());
+        } finally {
+            session.close();
+        }
+    }
+
     private static InboundMediaFrame h264ConfigFrame(StreamKey streamKey) {
         return new InboundMediaFrame(
                 StreamProtocol.RTMP,

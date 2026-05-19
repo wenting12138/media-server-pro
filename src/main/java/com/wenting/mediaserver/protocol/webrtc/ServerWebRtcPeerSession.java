@@ -66,6 +66,7 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
     private final Map<String, SentSrtpPacketCache> sentPacketCachesByTrackId = new ConcurrentHashMap<String, SentSrtpPacketCache>();
     private final Map<String, List<byte[]>> latestConfigPacketsByTrackId = new ConcurrentHashMap<String, List<byte[]>>();
     private final Map<String, List<byte[]>> latestKeyFramePacketsByTrackId = new ConcurrentHashMap<String, List<byte[]>>();
+    private final Map<String, List<InboundRtpPacket>> pendingSourcePacketsByTrackId = new ConcurrentHashMap<String, List<InboundRtpPacket>>();
     private final AtomicLong outboundSrtpPacketCount = new AtomicLong(0);
     private final AtomicLong pliCount = new AtomicLong(0);
     private final AtomicLong nackCount = new AtomicLong(0);
@@ -78,6 +79,7 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
     private static final int MAX_NACK_RESEND_PACKETS = 64;
     private static final int SENT_PACKET_CACHE_CAPACITY = 4096;
     private static final long SENT_PACKET_CACHE_MAX_AGE_MS = 2000L;
+    private static final int MAX_PENDING_SOURCE_PACKETS_PER_TRACK = 32;
 
     public ServerWebRtcPeerSession(
             String sessionId,
@@ -124,11 +126,15 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
         return true;
     }
 
-    public void writeMediaPacket(InboundRtpPacket packet) {
+    public synchronized void writeMediaPacket(InboundRtpPacket packet) {
         if (packet == null || packet.rtcp()) {
             return;
         }
         if (canRelaySourceRtpPacket(packet)) {
+            if (!isSendReady(packet.frame())) {
+                queuePendingSourcePacket(packet);
+                return;
+            }
             relaySourceRtpPacket(packet);
             return;
         }
@@ -210,6 +216,7 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
             this.remoteAddress = remoteAddress;
         }
         datagramIo.receive(data, remoteAddress);
+        flushPendingSourcePacketsIfReady();
     }
 
     private boolean canSendFrame(InboundMediaFrame frame) {
@@ -227,6 +234,10 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
             return false;
         }
         return true;
+    }
+
+    private boolean isSendReady(InboundMediaFrame frame) {
+        return frame != null && remoteAddress != null && findSendTransceiver(frame) != null;
     }
 
     private void sendFrame(InboundMediaFrame frame, InboundMediaFrame timestampFrame) {
@@ -332,6 +343,49 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
                     sessionId, streamKey, target, ex);
             return null;
         });
+    }
+
+    private void queuePendingSourcePacket(InboundRtpPacket packet) {
+        if (packet == null || packet.frame() == null) {
+            return;
+        }
+        String trackId = normalizeTrackId(packet.frame().trackId());
+        List<InboundRtpPacket> packets = pendingSourcePacketsByTrackId.get(trackId);
+        if (packets == null) {
+            packets = new ArrayList<InboundRtpPacket>();
+            List<InboundRtpPacket> raced = pendingSourcePacketsByTrackId.putIfAbsent(trackId, packets);
+            if (raced != null) {
+                packets = raced;
+            }
+        }
+        if (packets.size() >= MAX_PENDING_SOURCE_PACKETS_PER_TRACK) {
+            packets.remove(0);
+        }
+        packets.add(packet);
+    }
+
+    private synchronized void flushPendingSourcePacketsIfReady() {
+        if (pendingSourcePacketsByTrackId.isEmpty()) {
+            return;
+        }
+        List<String> readyTrackIds = new ArrayList<String>(pendingSourcePacketsByTrackId.keySet());
+        for (String trackId : readyTrackIds) {
+            List<InboundRtpPacket> pendingPackets = pendingSourcePacketsByTrackId.get(trackId);
+            if (pendingPackets == null || pendingPackets.isEmpty()) {
+                pendingSourcePacketsByTrackId.remove(trackId);
+                continue;
+            }
+            InboundMediaFrame firstFrame = pendingPackets.get(0) == null ? null : pendingPackets.get(0).frame();
+            if (!isSendReady(firstFrame)) {
+                continue;
+            }
+            pendingSourcePacketsByTrackId.remove(trackId);
+            for (InboundRtpPacket pendingPacket : pendingPackets) {
+                if (pendingPacket != null && canRelaySourceRtpPacket(pendingPacket)) {
+                    relaySourceRtpPacket(pendingPacket);
+                }
+            }
+        }
     }
 
     private void logFirstSrtpPacket(InboundMediaFrame frame, int payloadType, int clockRate, InetSocketAddress target, int bytes, boolean marker) {

@@ -1,5 +1,7 @@
 package com.wenting.mediaserver.protocol.webrtc;
 
+import com.wenting.mediaserver.core.model.StreamKey;
+
 import java.net.InetSocketAddress;
 import java.util.Collection;
 import java.util.Collections;
@@ -44,6 +46,18 @@ public final class WebRtcPublishSessionManager implements AutoCloseable {
 
     public WebRtcPublishPeerSession findByRemoteAddress(InetSocketAddress remoteAddress) {
         return remoteAddress == null ? null : sessionsByRemoteAddress.get(remoteAddress);
+    }
+
+    public WebRtcPublishPeerSession findByStreamKey(StreamKey streamKey) {
+        if (streamKey == null) {
+            return null;
+        }
+        for (WebRtcPublishPeerSession session : sessionsById.values()) {
+            if (session != null && streamKey.equals(session.streamKey())) {
+                return session;
+            }
+        }
+        return null;
     }
 
     public WebRtcPublishPeerSession remove(String sessionId) {

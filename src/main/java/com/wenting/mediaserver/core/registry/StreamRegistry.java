@@ -3,6 +3,8 @@ package com.wenting.mediaserver.core.registry;
 import com.wenting.mediaserver.core.enums.StreamProtocol;
 import com.wenting.mediaserver.core.enums.publish.CodecType;
 import com.wenting.mediaserver.core.enums.publish.TrackType;
+import com.wenting.mediaserver.core.publish.KeyFrameRequestHandler;
+import com.wenting.mediaserver.core.publish.SubscriberCountObserver;
 import com.wenting.mediaserver.core.track.ITrack;
 import com.wenting.mediaserver.core.model.StreamKey;
 import com.wenting.mediaserver.core.publish.DefaultPublishedStream;
@@ -14,6 +16,8 @@ import com.wenting.mediaserver.protocol.rtmp.RtmpSessionManager;
 import com.wenting.mediaserver.core.transcode.orchestrator.StreamTransformOrchestrator;
 import com.wenting.mediaserver.protocol.rtsp.RtspSession;
 import com.wenting.mediaserver.protocol.rtsp.RtspSessionManager;
+import com.wenting.mediaserver.protocol.webrtc.WebRtcPublishPeerSession;
+import com.wenting.mediaserver.protocol.webrtc.WebRtcPublishSessionManager;
 import io.netty.buffer.ByteBufUtil;
 import com.wenting.mediaserver.protocol.rtsp.RtspUdpBinding;
 import io.netty.buffer.ByteBuf;
@@ -38,6 +42,7 @@ public final class StreamRegistry {
 
     private final RtspSessionManager sessionManager;
     private final RtmpSessionManager rtmpSessionManager;
+    private volatile WebRtcPublishSessionManager webRtcPublishSessionManager;
     private final Map<StreamKey, IPublishedStream> published = new ConcurrentHashMap<StreamKey, IPublishedStream>();
     private final Map<Integer, RtspUdpBinding> udpPortBindings = new ConcurrentHashMap<Integer, RtspUdpBinding>();
     private final String webRtcPlaybackSuffix;
@@ -137,7 +142,7 @@ public final class StreamRegistry {
             return null;
         }
         IPublishedStream source = findPublishedStreamByPath(app, stream);
-        if (source == null || source.getProtocol() != com.wenting.mediaserver.core.enums.StreamProtocol.WEBRTC) {
+        if (source == null || source.getProtocol() != StreamProtocol.WEBRTC) {
             return null;
         }
         return findPublishedStreamByPath(app, stream + hlsAudioPlaybackSuffix);
@@ -175,6 +180,13 @@ public final class StreamRegistry {
 
     public void setStreamTransformOrchestrator(StreamTransformOrchestrator streamTransformOrchestrator) {
         this.streamTransformOrchestrator = streamTransformOrchestrator;
+        for (Map.Entry<StreamKey, IPublishedStream> entry : published.entrySet()) {
+            attachStreamObservers(entry.getKey(), entry.getValue());
+        }
+    }
+
+    public void setWebRtcPublishSessionManager(WebRtcPublishSessionManager webRtcPublishSessionManager) {
+        this.webRtcPublishSessionManager = webRtcPublishSessionManager;
         for (Map.Entry<StreamKey, IPublishedStream> entry : published.entrySet()) {
             attachStreamObservers(entry.getKey(), entry.getValue());
         }
@@ -256,19 +268,12 @@ public final class StreamRegistry {
                 manager == null ? null : manager::onPacket
         );
         publishedStream.setKeyFrameRequestHandler(
-                manager == null || !manager.managesDerivedStream(key)
-                        ? null
-                        : new com.wenting.mediaserver.core.publish.KeyFrameRequestHandler() {
-                            @Override
-                            public boolean requestKeyFrame(String trackId) {
-                                return manager.requestKeyFrame(manager.sourceKeyForDerived(key), trackId);
-                            }
-                        }
+                buildKeyFrameRequestHandler(key, manager)
         );
         publishedStream.setSubscriberCountObserver(
                 manager == null || !manager.managesDerivedStream(key)
                         ? null
-                        : new com.wenting.mediaserver.core.publish.SubscriberCountObserver() {
+                        : new SubscriberCountObserver() {
                             @Override
                             public void onSubscriberCountChanged(int subscriberCount) {
                                 StreamKey sourceKey = manager.sourceKeyForDerived(key);
@@ -300,9 +305,41 @@ public final class StreamRegistry {
         return rtmpSessionManager;
     }
 
+    public WebRtcPublishSessionManager getWebRtcPublishSessionManager() {
+        return webRtcPublishSessionManager;
+    }
+
     private String resolvePrimaryVideoTrackId(StreamKey sourceKey) {
         IPublishedStream sourceStream = findPublishedStream(sourceKey);
         return sourceStream == null ? null : sourceStream.firstVideoTrackId();
+    }
+
+    private KeyFrameRequestHandler buildKeyFrameRequestHandler(
+            StreamKey key,
+            StreamTransformOrchestrator manager
+    ) {
+        if (key == null) {
+            return null;
+        }
+        if (manager != null && manager.managesDerivedStream(key)) {
+            return new KeyFrameRequestHandler() {
+                @Override
+                public boolean requestKeyFrame(String trackId) {
+                    return manager.requestKeyFrame(manager.sourceKeyForDerived(key), trackId);
+                }
+            };
+        }
+        if (key.protocol() == StreamProtocol.WEBRTC && webRtcPublishSessionManager != null) {
+            return new KeyFrameRequestHandler() {
+                @Override
+                public boolean requestKeyFrame(String trackId) {
+                    WebRtcPublishPeerSession session =
+                            webRtcPublishSessionManager.findByStreamKey(key);
+                    return session != null && session.requestVideoKeyFrame(trackId);
+                }
+            };
+        }
+        return null;
     }
 
     private IPublishedStream findPublishedStreamForLegacyPlayback(String app, String stream) {
@@ -313,7 +350,7 @@ public final class StreamRegistry {
         if (source == null) {
             return null;
         }
-        if (source.getProtocol() != com.wenting.mediaserver.core.enums.StreamProtocol.WEBRTC) {
+        if (source.getProtocol() != StreamProtocol.WEBRTC) {
             return source;
         }
         IPublishedStream derived = findPublishedStreamByPath(app, stream + webRtcPlaybackSuffix);

@@ -95,6 +95,28 @@ public final class WebRtcPublishPeerSession implements AutoCloseable {
         datagramIo.receive(data, remoteAddress);
     }
 
+    public boolean requestVideoKeyFrame(String trackId) {
+        for (RTCRtpTransceiver transceiver : peerConnection.getTransceivers()) {
+            if (!canReceive(transceiver) || transceiver.getKind() != MediaStreamTrack.Kind.VIDEO) {
+                continue;
+            }
+            String candidateTrackId = trackId(transceiver, transceiver.getReceiver());
+            if (trackId != null && !trackId.trim().isEmpty() && !trackId.trim().equals(candidateTrackId)) {
+                continue;
+            }
+            RTCRtpReceiver receiver = transceiver.getReceiver();
+            long mediaSsrc = receiver == null ? 0L : receiver.getPeerSsrc();
+            if (mediaSsrc <= 0L) {
+                continue;
+            }
+            return peerConnection.sendPictureLossIndication(
+                    transceiver.getSender().getSsrc(),
+                    mediaSsrc
+            );
+        }
+        return false;
+    }
+
     @Override
     public void close() {
         if (!closed.compareAndSet(false, true)) {
