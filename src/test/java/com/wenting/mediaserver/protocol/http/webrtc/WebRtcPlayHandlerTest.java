@@ -7,8 +7,8 @@ import com.wenting.mediaserver.core.model.StreamKey;
 import com.wenting.mediaserver.core.publish.DefaultPublishedStream;
 import com.wenting.mediaserver.core.registry.StreamRegistry;
 import com.wenting.mediaserver.protocol.http.HttpRouterHandler;
-import com.wenting.mediaserver.protocol.webrtc.ServerWebRtcPeerSession;
-import com.wenting.mediaserver.protocol.webrtc.WebRtcSessionManager;
+import com.wenting.mediaserver.protocol.webrtc.WebRtcPlaybackPeerSession;
+import com.wenting.mediaserver.protocol.webrtc.WebRtcPlaybackSessionManager;
 import com.wenting.mediaserver.protocol.webrtc.transport.DatagramIoSender;
 import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.handler.codec.http.DefaultFullHttpRequest;
@@ -34,7 +34,7 @@ class WebRtcPlayHandlerTest {
         StreamKey streamKey = new StreamKey(StreamProtocol.RTMP, "live", "cam01");
         DefaultPublishedStream publishedStream = new DefaultPublishedStream(streamKey);
         registry.registerPublishedStream(streamKey, publishedStream);
-        WebRtcSessionManager sessionManager = new WebRtcSessionManager();
+        WebRtcPlaybackSessionManager sessionManager = new WebRtcPlaybackSessionManager();
         EmbeddedChannel channel = new EmbeddedChannel(
                 new HttpRouterHandler(new WebRtcPlayHandler(
                         registry,
@@ -79,7 +79,7 @@ class WebRtcPlayHandlerTest {
         EmbeddedChannel channel = new EmbeddedChannel(
                 new HttpRouterHandler(new WebRtcPlayHandler(
                         new StreamRegistry(),
-                        new WebRtcSessionManager(),
+                        new WebRtcPlaybackSessionManager(),
                         new InetSocketAddress("192.168.3.52", 18081),
                         new NoopDatagramIoSender()
                 ))
@@ -99,7 +99,7 @@ class WebRtcPlayHandlerTest {
         StreamKey streamKey = new StreamKey(StreamProtocol.RTMP, "live", "cam01");
         DefaultPublishedStream publishedStream = new DefaultPublishedStream(streamKey);
         registry.registerPublishedStream(streamKey, publishedStream);
-        WebRtcSessionManager sessionManager = new WebRtcSessionManager();
+        WebRtcPlaybackSessionManager sessionManager = new WebRtcPlaybackSessionManager();
         EmbeddedChannel channel = new EmbeddedChannel(
                 new HttpRouterHandler(new WebRtcPlayHandler(
                         registry,
@@ -130,7 +130,7 @@ class WebRtcPlayHandlerTest {
         StreamKey streamKey = new StreamKey(StreamProtocol.RTMP, "live", "cam01");
         DefaultPublishedStream publishedStream = new DefaultPublishedStream(streamKey);
         registry.registerPublishedStream(streamKey, publishedStream);
-        WebRtcSessionManager sessionManager = new WebRtcSessionManager();
+        WebRtcPlaybackSessionManager sessionManager = new WebRtcPlaybackSessionManager();
         EmbeddedChannel channel = new EmbeddedChannel(
                 new HttpRouterHandler(new WebRtcPlayHandler(
                         registry,
@@ -147,7 +147,7 @@ class WebRtcPlayHandlerTest {
         assertEquals(1, sessionManager.count());
         assertEquals(1, publishedStream.subscriberCount());
 
-        ServerWebRtcPeerSession session = sessionManager.sessions().iterator().next();
+        WebRtcPlaybackPeerSession session = sessionManager.sessions().iterator().next();
         session.peerConnection().close();
 
         assertEquals(0, sessionManager.count());
@@ -162,7 +162,7 @@ class WebRtcPlayHandlerTest {
         EmbeddedChannel channel = new EmbeddedChannel(
                 new HttpRouterHandler(new WebRtcPlayHandler(
                         new StreamRegistry(),
-                        new WebRtcSessionManager(),
+                        new WebRtcPlaybackSessionManager(),
                         new InetSocketAddress("192.168.3.52", 18081),
                         new NoopDatagramIoSender()
                 ))

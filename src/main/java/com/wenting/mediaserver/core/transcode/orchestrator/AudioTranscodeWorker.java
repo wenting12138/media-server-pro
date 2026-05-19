@@ -86,7 +86,7 @@ final class AudioTranscodeWorker implements Runnable {
             publisher.ensureStream(derivedKey);
         }
         worker.thread.start();
-        log.info("Started audio transform worker source={} derived={}", sourceKey, derivedKey);
+        log.debug("Started audio transform worker source={} derived={}", sourceKey, derivedKey);
         return worker;
     }
 
@@ -101,7 +101,7 @@ final class AudioTranscodeWorker implements Runnable {
         if (publisher != null) {
             publisher.removeStream(derivedKey);
         }
-        log.info("Stopped audio transform worker source={} derived={}", sourceKey, derivedKey);
+        log.debug("Stopped audio transform worker source={} derived={}", sourceKey, derivedKey);
     }
 
     void enqueueFrame(InboundMediaFrame frame) {

@@ -10,7 +10,7 @@ import com.wenting.mediaserver.protocol.rtmp.RtmpSessionManager;
 import com.wenting.mediaserver.protocol.rtsp.RtspBootstrap;
 import com.wenting.mediaserver.protocol.rtsp.RtspSessionManager;
 import com.wenting.mediaserver.protocol.webrtc.WebRtcPublishSessionManager;
-import com.wenting.mediaserver.protocol.webrtc.WebRtcSessionManager;
+import com.wenting.mediaserver.protocol.webrtc.WebRtcPlaybackSessionManager;
 import com.wenting.mediaserver.protocol.webrtc.WebRtcUdpBootstrap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -31,14 +31,14 @@ public final class MediaServerBootstrap implements AutoCloseable {
     private final StreamTransformOrchestrator streamTransformOrchestrator;
     private final RtmpSessionManager rtmpSessionManager;
     private final RtspSessionManager sessionManager;
-    private final WebRtcSessionManager webRtcSessionManager;
+    private final WebRtcPlaybackSessionManager webRtcPlaybackSessionManager;
     private final WebRtcPublishSessionManager webRtcPublishSessionManager;
 
     public MediaServerBootstrap(MediaServerConfig config) {
         this.config = config;
         this.rtmpSessionManager = new RtmpSessionManager();
         this.sessionManager = new RtspSessionManager();
-        this.webRtcSessionManager = new WebRtcSessionManager();
+        this.webRtcPlaybackSessionManager = new WebRtcPlaybackSessionManager();
         this.webRtcPublishSessionManager = new WebRtcPublishSessionManager();
         this.registry = new StreamRegistry(sessionManager, rtmpSessionManager);
         this.registry.setWebRtcPublishSessionManager(webRtcPublishSessionManager);
@@ -47,11 +47,11 @@ public final class MediaServerBootstrap implements AutoCloseable {
                 registry.webRtcPlaybackSuffix()
         );
         this.registry.setStreamTransformOrchestrator(streamTransformOrchestrator);
-        this.webRtcUdpBootstrap = new WebRtcUdpBootstrap(config, webRtcSessionManager, webRtcPublishSessionManager);
+        this.webRtcUdpBootstrap = new WebRtcUdpBootstrap(config, webRtcPlaybackSessionManager, webRtcPublishSessionManager);
         this.httpBootstrap = new HttpBootstrap(
                 config,
                 registry,
-                webRtcSessionManager,
+                webRtcPlaybackSessionManager,
                 webRtcPublishSessionManager,
                 webRtcUdpBootstrap,
                 webRtcUdpBootstrap.localAddress()

@@ -18,17 +18,17 @@ public final class WebRtcUdpBootstrap implements IServerBootstrap, DatagramIoSen
     private static final Logger log = LoggerFactory.getLogger(WebRtcUdpBootstrap.class);
 
     private final MediaServerConfig config;
-    private final WebRtcSessionManager sessionManager;
+    private final WebRtcPlaybackSessionManager sessionManager;
     private final WebRtcPublishSessionManager publishSessionManager;
     private final UdpTransport transport;
 
-    public WebRtcUdpBootstrap(MediaServerConfig config, WebRtcSessionManager sessionManager) {
+    public WebRtcUdpBootstrap(MediaServerConfig config, WebRtcPlaybackSessionManager sessionManager) {
         this(config, sessionManager, null);
     }
 
     public WebRtcUdpBootstrap(
             MediaServerConfig config,
-            WebRtcSessionManager sessionManager,
+            WebRtcPlaybackSessionManager sessionManager,
             WebRtcPublishSessionManager publishSessionManager
     ) {
         this.config = config;

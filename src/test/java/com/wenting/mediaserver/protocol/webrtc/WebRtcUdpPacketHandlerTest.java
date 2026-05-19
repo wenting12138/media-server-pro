@@ -37,14 +37,14 @@ public class WebRtcUdpPacketHandlerTest {
         RecordingDatagramSender sender = new RecordingDatagramSender();
         SessionDatagramIo datagramIo = new SessionDatagramIo(new InetSocketAddress("192.168.3.52", 18081), sender);
         RTCPeerConnection peerConnection = new RTCPeerConnection(datagramIo);
-        WebRtcSessionManager sessionManager = new WebRtcSessionManager();
+        WebRtcPlaybackSessionManager sessionManager = new WebRtcPlaybackSessionManager();
         try {
             RTCSessionDescription offer = new RTCSessionDescription("offer", offerWithH264());
             peerConnection.setRemoteDescription(offer);
             RTCSessionDescription answer = peerConnection.createAnswer().get();
             peerConnection.setLocalDescription(answer);
 
-            ServerWebRtcPeerSession session = new ServerWebRtcPeerSession(
+            WebRtcPlaybackPeerSession session = new WebRtcPlaybackPeerSession(
                     "sess-1",
                     new StreamKey(StreamProtocol.RTMP, "live", "cam01"),
                     peerConnection,
@@ -148,14 +148,14 @@ public class WebRtcUdpPacketHandlerTest {
         RecordingDatagramSender sender = new RecordingDatagramSender();
         SessionDatagramIo datagramIo = new SessionDatagramIo(new InetSocketAddress("192.168.3.52", 18081), sender);
         RTCPeerConnection peerConnection = new RTCPeerConnection(datagramIo);
-        WebRtcSessionManager sessionManager = new WebRtcSessionManager();
+        WebRtcPlaybackSessionManager sessionManager = new WebRtcPlaybackSessionManager();
         try {
             RTCSessionDescription offer = new RTCSessionDescription("offer", offerWithH264());
             peerConnection.setRemoteDescription(offer);
             RTCSessionDescription answer = peerConnection.createAnswer().get();
             peerConnection.setLocalDescription(answer);
 
-            ServerWebRtcPeerSession session = new ServerWebRtcPeerSession(
+            WebRtcPlaybackPeerSession session = new WebRtcPlaybackPeerSession(
                     "sess-1",
                     new StreamKey(StreamProtocol.RTMP, "live", "cam01"),
                     peerConnection,

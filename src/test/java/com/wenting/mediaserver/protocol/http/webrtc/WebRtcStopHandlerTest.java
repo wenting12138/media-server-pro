@@ -4,8 +4,8 @@ import com.wenting.mediaserver.core.enums.StreamProtocol;
 import com.wenting.mediaserver.core.model.StreamKey;
 import com.wenting.mediaserver.core.publish.DefaultPublishedStream;
 import com.wenting.mediaserver.protocol.http.HttpRouterHandler;
-import com.wenting.mediaserver.protocol.webrtc.ServerWebRtcPeerSession;
-import com.wenting.mediaserver.protocol.webrtc.WebRtcSessionManager;
+import com.wenting.mediaserver.protocol.webrtc.WebRtcPlaybackPeerSession;
+import com.wenting.mediaserver.protocol.webrtc.WebRtcPlaybackSessionManager;
 import com.wenting.mediaserver.protocol.webrtc.api.RTCPeerConnection;
 import com.wenting.mediaserver.protocol.webrtc.transport.DatagramIoSender;
 import com.wenting.mediaserver.protocol.webrtc.transport.SessionDatagramIo;
@@ -27,7 +27,7 @@ class WebRtcStopHandlerTest {
 
     @Test
     void shouldCloseSessionAndRemoveSubscriberWhenStopCalled() throws Exception {
-        WebRtcSessionManager sessionManager = new WebRtcSessionManager();
+        WebRtcPlaybackSessionManager sessionManager = new WebRtcPlaybackSessionManager();
         DefaultPublishedStream publishedStream = new DefaultPublishedStream(
                 new StreamKey(StreamProtocol.RTMP, "live", "cam01")
         );
@@ -36,7 +36,7 @@ class WebRtcStopHandlerTest {
                 new NoopDatagramIoSender()
         );
         RTCPeerConnection peerConnection = new RTCPeerConnection(datagramIo);
-        ServerWebRtcPeerSession session = new ServerWebRtcPeerSession(
+        WebRtcPlaybackPeerSession session = new WebRtcPlaybackPeerSession(
                 "sess-stop-1",
                 new StreamKey(StreamProtocol.RTMP, "live", "cam01"),
                 peerConnection,
@@ -65,7 +65,7 @@ class WebRtcStopHandlerTest {
 
     @Test
     void shouldReturnNotFoundForUnknownSession() {
-        WebRtcSessionManager sessionManager = new WebRtcSessionManager();
+        WebRtcPlaybackSessionManager sessionManager = new WebRtcPlaybackSessionManager();
         EmbeddedChannel channel = new EmbeddedChannel(
                 new HttpRouterHandler(new WebRtcStopHandler(sessionManager))
         );

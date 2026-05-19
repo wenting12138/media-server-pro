@@ -280,7 +280,7 @@ public class IceAgent {
                 && pair.getState() != CandidatePair.State.NOMINATED;
             if (isNewSuccess) {
                 pair.setState(CandidatePair.State.SUCCEEDED);
-                LOG.info("ICE check succeeded: " + pair);
+                LOG.debug("ICE check succeeded: " + pair);
                 fireEvent(new IceEvent(IceEvent.Type.PAIR_SUCCEEDED, pair));
                 updateState();
             }
@@ -289,7 +289,7 @@ public class IceAgent {
             if (useCandidate && role == Role.CONTROLLED) {
                 if (pair.getState() != CandidatePair.State.NOMINATED) {
                     pair.setState(CandidatePair.State.NOMINATED);
-                    LOG.info("Pair nominated by peer: " + pair);
+                    LOG.debug("Pair nominated by peer: " + pair);
                     fireEvent(new IceEvent(IceEvent.Type.NOMINATED, pair));
                     updateState();
                 }
@@ -568,7 +568,7 @@ public class IceAgent {
     private synchronized void setState(State newState) {
         State old = this.state;
         this.state = newState;
-        LOG.info("ICE state: " + old + " -> " + newState);
+        LOG.debug("ICE state: " + old + " -> " + newState);
         fireEvent(new IceEvent(IceEvent.Type.STATE_CHANGED, (CandidatePair) null));
     }
 
@@ -696,7 +696,7 @@ public class IceAgent {
             this::sendConsentRequest,
             CONSENT_CHECK_INTERVAL_MS, CONSENT_CHECK_INTERVAL_MS,
             TimeUnit.MILLISECONDS);
-        LOG.info("Consent freshness checks started (interval="
+        LOG.debug("Consent freshness checks started (interval="
             + CONSENT_CHECK_INTERVAL_MS + "ms)");
     }
 
@@ -740,7 +740,7 @@ public class IceAgent {
         CandidatePair pair = new CandidatePair(local, remote);
         checkList.add(pair);
         Collections.sort(checkList);
-        LOG.info("Created peer-reflexive ICE pair from Binding Request: " + pair);
+        LOG.debug("Created peer-reflexive ICE pair from Binding Request: " + pair);
         return pair;
     }
 

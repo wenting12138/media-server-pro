@@ -93,7 +93,7 @@ public final class WebRtcIngestFeedbackController {
                     state.reportsSent++;
                     if (!state.firstReportLogged) {
                         state.firstReportLogged = true;
-                        log.info("Sent first WebRTC ingest RR track={} mediaSsrc={} receiverSsrc={}",
+                        log.debug("Sent first WebRTC ingest RR track={} mediaSsrc={} receiverSsrc={}",
                                 state.trackId,
                                 state.stats.mediaSsrc(),
                                 state.transceiver.getSender().getSsrc() & 0xFFFFFFFFL);

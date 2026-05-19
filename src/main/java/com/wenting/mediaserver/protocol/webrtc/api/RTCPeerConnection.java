@@ -693,7 +693,7 @@ public class RTCPeerConnection implements AutoCloseable {
                     onIcePairSucceeded(event.getPair());
                     break;
                 case NOMINATED:
-                    LOG.info("ICE pair nominated: " + event.getPair());
+                    LOG.debug("ICE pair nominated: " + event.getPair());
                     break;
                 case STATE_CHANGED:
                     onIceStateChanged();
@@ -741,7 +741,7 @@ public class RTCPeerConnection implements AutoCloseable {
                 break;
             case COMPLETED:
                 setIceState(IceConnectionState.COMPLETED);
-                LOG.info("ICE completed, selected pair: " + iceAgent.getSelectedPair());
+                LOG.debug("ICE completed, selected pair: " + iceAgent.getSelectedPair());
                 break;
             default:
                 break;
@@ -896,7 +896,7 @@ public class RTCPeerConnection implements AutoCloseable {
         }, CONNECTION_MONITOR_INTERVAL_MS, CONNECTION_MONITOR_INTERVAL_MS,
             TimeUnit.MILLISECONDS);
 
-        LOG.info("Connection health monitor started (interval="
+        LOG.debug("Connection health monitor started (interval="
             + CONNECTION_MONITOR_INTERVAL_MS + "ms)");
     }
 
@@ -938,7 +938,7 @@ public class RTCPeerConnection implements AutoCloseable {
                         LOG.error("SRTP unprotect failed for SSRC " + peerSsrc + ": " + e.getMessage());
                     }
                 });
-                LOG.info("Registered SRTP demux for SSRC " + peerSsrc + " (" + transceiver.getKind() + ")");
+                LOG.debug("Registered SRTP demux for SSRC " + peerSsrc + " (" + transceiver.getKind() + ")");
             }
         }
         inboundSrtcpContext = transceivers.isEmpty() ? null : transceivers.get(0).getReceiver().getSrtpContext();

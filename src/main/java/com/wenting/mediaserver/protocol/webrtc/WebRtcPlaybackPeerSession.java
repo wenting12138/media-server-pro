@@ -12,16 +12,17 @@ import com.wenting.mediaserver.core.publish.InboundMediaFrame;
 import com.wenting.mediaserver.core.publish.InboundRtpPacket;
 import com.wenting.mediaserver.core.publish.MediaSubscriberAdapter;
 import com.wenting.mediaserver.core.remux.rtp.RtpPacketChunk;
-import com.wenting.mediaserver.core.remux.rtp.RtpPayloadTypeResolver;
 import com.wenting.mediaserver.core.remux.rtp.RtpSendTrackState;
 import com.wenting.mediaserver.core.remux.rtp.RtspFrameToRtpPacketizer;
 import com.wenting.mediaserver.protocol.webrtc.api.RTCPeerConnection;
 import com.wenting.mediaserver.protocol.webrtc.api.RtcpFeedbackListener;
 import com.wenting.mediaserver.protocol.webrtc.api.RTCRtpSender;
 import com.wenting.mediaserver.protocol.webrtc.api.RTCRtpTransceiver;
+import com.wenting.mediaserver.protocol.webrtc.cache.SentSrtpPacketCache;
 import com.wenting.mediaserver.protocol.webrtc.core.rtp.RtpPacket;
 import com.wenting.mediaserver.protocol.webrtc.core.srtp.SrtpTransform;
 import com.wenting.mediaserver.protocol.webrtc.transport.SessionDatagramIo;
+import com.wenting.mediaserver.protocol.webrtc.util.WebrtcPlayUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -29,7 +30,6 @@ import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -44,9 +44,9 @@ import java.util.concurrent.atomic.AtomicLong;
  * Keeps HTTP signaling and published-stream subscription state outside the
  * browser-style RTCPeerConnection object.
  */
-public final class ServerWebRtcPeerSession implements AutoCloseable {
+public final class WebRtcPlaybackPeerSession implements AutoCloseable {
 
-    private static final Logger log = LoggerFactory.getLogger(ServerWebRtcPeerSession.class);
+    private static final Logger log = LoggerFactory.getLogger(WebRtcPlaybackPeerSession.class);
 
     private final String sessionId;
     private final StreamKey streamKey;
@@ -67,6 +67,8 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
     private final Map<String, List<byte[]>> latestConfigPacketsByTrackId = new ConcurrentHashMap<String, List<byte[]>>();
     private final Map<String, List<byte[]>> latestKeyFramePacketsByTrackId = new ConcurrentHashMap<String, List<byte[]>>();
     private final Map<String, List<InboundRtpPacket>> pendingSourcePacketsByTrackId = new ConcurrentHashMap<String, List<InboundRtpPacket>>();
+    private final Map<String, InboundMediaFrame> pendingStartupConfigFramesByTrackId = new ConcurrentHashMap<String, InboundMediaFrame>();
+    private final Map<String, InboundMediaFrame> pendingStartupKeyFramesByTrackId = new ConcurrentHashMap<String, InboundMediaFrame>();
     private final AtomicLong outboundSrtpPacketCount = new AtomicLong(0);
     private final AtomicLong pliCount = new AtomicLong(0);
     private final AtomicLong nackCount = new AtomicLong(0);
@@ -81,7 +83,7 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
     private static final long SENT_PACKET_CACHE_MAX_AGE_MS = 2000L;
     private static final int MAX_PENDING_SOURCE_PACKETS_PER_TRACK = 32;
 
-    public ServerWebRtcPeerSession(
+    public WebRtcPlaybackPeerSession(
             String sessionId,
             StreamKey streamKey,
             RTCPeerConnection peerConnection,
@@ -130,6 +132,7 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
         if (packet == null || packet.rtcp()) {
             return;
         }
+        flushPendingStartupIfReady();
         if (canRelaySourceRtpPacket(packet)) {
             if (!isSendReady(packet.frame())) {
                 queuePendingSourcePacket(packet);
@@ -145,6 +148,7 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
         if (closed.get() || frame == null) {
             return;
         }
+        flushPendingStartupIfReady();
         if (frame.trackType() == TrackType.VIDEO && frame.codecType() == CodecType.H264) {
             writeVideoFrame(frame);
             return;
@@ -155,16 +159,23 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
     }
 
     private void writeVideoFrame(InboundMediaFrame frame) {
-        String trackId = normalizeTrackId(frame.trackId());
+        String trackId = WebrtcPlayUtil.normalizeTrackId(frame.trackId());
         if (frame.configFrame()) {
             latestConfigFramesByTrackId.put(trackId, frame);
             logConfigProfileOnce(trackId, frame);
+            if (!isSendReady(frame)) {
+                pendingStartupConfigFramesByTrackId.put(trackId, frame);
+                return;
+            }
             if (isStarted(trackId)) {
                 sendFrame(frame, frame);
             }
             return;
         }
         if (!canSendFrame(frame)) {
+            if (frame.keyFrame()) {
+                pendingStartupKeyFramesByTrackId.put(trackId, frame);
+            }
             return;
         }
         if (!isStarted(trackId)) {
@@ -191,7 +202,7 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
     }
 
     private void writeAudioFrame(InboundMediaFrame frame) {
-        String trackId = normalizeTrackId(frame.trackId());
+        String trackId = WebrtcPlayUtil.normalizeTrackId(frame.trackId());
         if (frame.configFrame()) {
             latestConfigFramesByTrackId.put(trackId, frame);
             return;
@@ -206,9 +217,14 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
                 return;
             }
         }
-        logDropOnce(trackId, "unsupported-audio-codec",
-                "WebRTC audio codec unsupported session={} stream={} track={} sourceCodec={} negotiatedCodec={}",
-                sessionId, streamKey, trackId, frame.codecType(), negotiatedCodec);
+    }
+
+    private CodecType resolveNegotiatedAudioCodec(InboundMediaFrame frame) {
+        RTCRtpTransceiver transceiver = findSendTransceiver(frame);
+        if (transceiver == null || transceiver.getNegotiatedCodecType() == null) {
+            return CodecType.UNKNOWN;
+        }
+        return transceiver.getNegotiatedCodecType();
     }
 
     public void receive(byte[] data, InetSocketAddress remoteAddress) {
@@ -216,21 +232,21 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
             this.remoteAddress = remoteAddress;
         }
         datagramIo.receive(data, remoteAddress);
-        flushPendingSourcePacketsIfReady();
+        flushPendingStartupIfReady();
     }
 
     private boolean canSendFrame(InboundMediaFrame frame) {
         if (remoteAddress == null) {
-            logDropOnce(normalizeTrackId(frame.trackId()), "no-remote",
+            logDropOnce(WebrtcPlayUtil.normalizeTrackId(frame.trackId()), "no-remote",
                     "WebRTC cannot send yet: remote address not bound session={} stream={} track={}",
-                    sessionId, streamKey, normalizeTrackId(frame.trackId()));
+                    sessionId, streamKey, WebrtcPlayUtil.normalizeTrackId(frame.trackId()));
             return false;
         }
         RTCRtpTransceiver transceiver = findSendTransceiver(frame);
         if (transceiver == null) {
-            logDropOnce(normalizeTrackId(frame.trackId()), "no-transceiver",
+            logDropOnce(WebrtcPlayUtil.normalizeTrackId(frame.trackId()), "no-transceiver",
                     "WebRTC cannot send yet: no send transceiver with SRTP context session={} stream={} track={}",
-                    sessionId, streamKey, normalizeTrackId(frame.trackId()));
+                    sessionId, streamKey, WebrtcPlayUtil.normalizeTrackId(frame.trackId()));
             return false;
         }
         return true;
@@ -251,18 +267,18 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
         List<RtpPacketChunk> chunks = frameToRtpPacketizer.packetize(
                 frame,
                 null,
-                latestConfigFramesByTrackId.get(normalizeTrackId(frame.trackId()))
+                latestConfigFramesByTrackId.get(WebrtcPlayUtil.normalizeTrackId(frame.trackId()))
         );
         if (chunks.isEmpty()) {
-            logDropOnce(normalizeTrackId(frame.trackId()), "empty-chunks",
+            logDropOnce(WebrtcPlayUtil.normalizeTrackId(frame.trackId()), "empty-chunks",
                     "WebRTC packetizer produced no RTP chunks session={} stream={} track={} config={} key={} bytes={}",
-                    sessionId, streamKey, normalizeTrackId(frame.trackId()), frame.configFrame(), frame.keyFrame(), frame.payloadLength());
+                    sessionId, streamKey, WebrtcPlayUtil.normalizeTrackId(frame.trackId()), frame.configFrame(), frame.keyFrame(), frame.payloadLength());
             return;
         }
         RtpSendTrackState sendState = sendState(frame.trackId(), sender.getSsrc());
-        int payloadType = resolvePayloadType(transceiver, frame.codecType());
-        int clockRate = resolveClockRate(transceiver, frame);
-        long rtpTimestamp = sendState.toRtpTimestamp(clockRate, mediaTimestampMillis(timestampFrame));
+        int payloadType = WebrtcPlayUtil.resolvePayloadType(transceiver, frame.codecType());
+        int clockRate = WebrtcPlayUtil.resolveClockRate(transceiver, frame);
+        long rtpTimestamp = sendState.toRtpTimestamp(clockRate, WebrtcPlayUtil.mediaTimestampMillis(timestampFrame));
         SrtpTransform transform = new SrtpTransform(sender.getSrtpContext(), sender.getSsrc());
         List<byte[]> sentPackets = new ArrayList<byte[]>(chunks.size());
         for (RtpPacketChunk chunk : chunks) {
@@ -284,7 +300,6 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
             sentPackets.add(Arrays.copyOf(srtpPacket, srtpPacket.length));
             cacheSentVideoPacket(frame, sequenceNumber, srtpPacket);
             logFirstSrtpPacket(frame, payloadType, clockRate, target, srtpPacket.length, chunk.marker());
-//            logPacketCount();
             datagramIo.send(srtpPacket, target).exceptionally(ex -> {
                 log.warn("Failed to send WebRTC SRTP packet session={} stream={} target={}",
                         sessionId, streamKey, target, ex);
@@ -313,13 +328,13 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
         RtpParseResult parseResult = rtpPacketParser.parse(frame.payload());
         RtpPacketHeader header = parseResult == null ? null : parseResult.rtpHeader();
         if (header == null || header.payloadLength() <= 0) {
-            logDropOnce(normalizeTrackId(frame.trackId()), "invalid-source-rtp",
+            logDropOnce(WebrtcPlayUtil.normalizeTrackId(frame.trackId()), "invalid-source-rtp",
                     "WebRTC direct RTP relay ignored invalid packet session={} stream={} track={} bytes={}",
-                    sessionId, streamKey, normalizeTrackId(frame.trackId()), frame.payloadLength());
+                    sessionId, streamKey, WebrtcPlayUtil.normalizeTrackId(frame.trackId()), frame.payloadLength());
             return;
         }
         RtpSendTrackState sendState = sendState(frame.trackId(), transceiver.getSender().getSsrc());
-        int payloadType = resolvePayloadType(transceiver, frame.codecType());
+        int payloadType = WebrtcPlayUtil.resolvePayloadType(transceiver, frame.codecType());
         byte[] payload = Arrays.copyOfRange(frame.payload(), header.payloadOffset(), header.payloadOffset() + header.payloadLength());
         RtpPacket rtpPacket = new RtpPacket(
                 2,
@@ -349,7 +364,7 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
         if (packet == null || packet.frame() == null) {
             return;
         }
-        String trackId = normalizeTrackId(packet.frame().trackId());
+        String trackId = WebrtcPlayUtil.normalizeTrackId(packet.frame().trackId());
         List<InboundRtpPacket> packets = pendingSourcePacketsByTrackId.get(trackId);
         if (packets == null) {
             packets = new ArrayList<InboundRtpPacket>();
@@ -364,7 +379,47 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
         packets.add(packet);
     }
 
-    private synchronized void flushPendingSourcePacketsIfReady() {
+    private synchronized void flushPendingStartupIfReady() {
+        flushPendingStartupFramesIfReady();
+        flushPendingSourcePacketsIfReady();
+    }
+
+    private void flushPendingStartupFramesIfReady() {
+        if (pendingStartupConfigFramesByTrackId.isEmpty() && pendingStartupKeyFramesByTrackId.isEmpty()) {
+            return;
+        }
+        List<String> trackIds = new ArrayList<String>(pendingStartupConfigFramesByTrackId.keySet());
+        for (String trackId : pendingStartupKeyFramesByTrackId.keySet()) {
+            if (!trackIds.contains(trackId)) {
+                trackIds.add(trackId);
+            }
+        }
+        for (String trackId : trackIds) {
+            InboundMediaFrame configFrame = pendingStartupConfigFramesByTrackId.get(trackId);
+            InboundMediaFrame keyFrame = pendingStartupKeyFramesByTrackId.get(trackId);
+            InboundMediaFrame readinessFrame = keyFrame != null ? keyFrame : configFrame;
+            if (!isSendReady(readinessFrame)) {
+                continue;
+            }
+            pendingStartupConfigFramesByTrackId.remove(trackId);
+            pendingStartupKeyFramesByTrackId.remove(trackId);
+            if (configFrame != null) {
+                latestConfigFramesByTrackId.put(trackId, configFrame);
+            }
+            if (keyFrame != null) {
+                if (configFrame != null) {
+                    sendFrame(configFrame, keyFrame);
+                }
+                startedTracksByTrackId.put(trackId, Boolean.TRUE);
+                sendFrame(keyFrame, keyFrame);
+                logFirstNonConfigKeyFrame(trackId, keyFrame);
+            } else if (configFrame != null && isStarted(trackId)) {
+                sendFrame(configFrame, configFrame);
+            }
+        }
+    }
+
+    private void flushPendingSourcePacketsIfReady() {
         if (pendingSourcePacketsByTrackId.isEmpty()) {
             return;
         }
@@ -389,7 +444,7 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
     }
 
     private void logFirstSrtpPacket(InboundMediaFrame frame, int payloadType, int clockRate, InetSocketAddress target, int bytes, boolean marker) {
-        String trackId = normalizeTrackId(frame.trackId());
+        String trackId = WebrtcPlayUtil.normalizeTrackId(frame.trackId());
         if (Boolean.TRUE.equals(firstSrtpPacketLoggedByTrackId.putIfAbsent(trackId, Boolean.TRUE))) {
             return;
         }
@@ -446,7 +501,7 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
             if (transceiver == null || transceiver.getSender() == null) {
                 continue;
             }
-            if (!matchesKind(transceiver, frame) || !canSend(transceiver)) {
+            if (!WebrtcPlayUtil.matchesKind(transceiver, frame) || !WebrtcPlayUtil.canSend(transceiver)) {
                 continue;
             }
             if (transceiver.getNegotiatedPayloadType() == null) {
@@ -464,7 +519,7 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
         if (frame == null || transceiver == null || transceiver.getSender() == null || frame.trackType() != TrackType.VIDEO) {
             return;
         }
-        String trackId = normalizeTrackId(frame.trackId());
+        String trackId = WebrtcPlayUtil.normalizeTrackId(frame.trackId());
         if (Boolean.TRUE.equals(feedbackListenerBoundByTrackId.putIfAbsent(trackId, Boolean.TRUE))) {
             return;
         }
@@ -501,7 +556,7 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
         if (frame == null || sentPackets == null || sentPackets.isEmpty() || frame.trackType() != TrackType.VIDEO) {
             return;
         }
-        String trackId = normalizeTrackId(frame.trackId());
+        String trackId = WebrtcPlayUtil.normalizeTrackId(frame.trackId());
         if (frame.configFrame()) {
             latestConfigPacketsByTrackId.put(trackId, immutablePacketCopies(sentPackets));
             return;
@@ -589,7 +644,7 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
     }
 
     private SentSrtpPacketCache sentPacketCache(String trackId) {
-        String normalized = normalizeTrackId(trackId);
+        String normalized = WebrtcPlayUtil.normalizeTrackId(trackId);
         SentSrtpPacketCache existing = sentPacketCachesByTrackId.get(normalized);
         if (existing != null) {
             return existing;
@@ -610,23 +665,8 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
         return Collections.unmodifiableList(copies);
     }
 
-    private boolean matchesKind(RTCRtpTransceiver transceiver, InboundMediaFrame frame) {
-        if (frame.trackType() == TrackType.VIDEO) {
-            return transceiver.getKind() == com.wenting.mediaserver.protocol.webrtc.api.MediaStreamTrack.Kind.VIDEO;
-        }
-        if (frame.trackType() == TrackType.AUDIO) {
-            return transceiver.getKind() == com.wenting.mediaserver.protocol.webrtc.api.MediaStreamTrack.Kind.AUDIO;
-        }
-        return false;
-    }
-
-    private boolean canSend(RTCRtpTransceiver transceiver) {
-        return transceiver.getDirection() == RTCRtpTransceiver.Direction.SENDONLY
-                || transceiver.getDirection() == RTCRtpTransceiver.Direction.SENDRECV;
-    }
-
     private RtpSendTrackState sendState(String trackId, long ssrc) {
-        String normalized = normalizeTrackId(trackId);
+        String normalized = WebrtcPlayUtil.normalizeTrackId(trackId);
         RtpSendTrackState state = rtpSendStatesByTrackId.get(normalized);
         if (state != null) {
             return state;
@@ -637,51 +677,9 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
     }
 
     private boolean isStarted(String trackId) {
-        return Boolean.TRUE.equals(startedTracksByTrackId.get(normalizeTrackId(trackId)));
+        return Boolean.TRUE.equals(startedTracksByTrackId.get(WebrtcPlayUtil.normalizeTrackId(trackId)));
     }
 
-    private int defaultClockRate(InboundMediaFrame frame) {
-        if (frame.trackType() == TrackType.VIDEO) {
-            return 90000;
-        }
-        if (frame.codecType() == CodecType.G711A || frame.codecType() == CodecType.G711U) {
-            return 8000;
-        }
-        return 48000;
-    }
-
-    private CodecType resolveNegotiatedAudioCodec(InboundMediaFrame frame) {
-        RTCRtpTransceiver transceiver = findSendTransceiver(frame);
-        if (transceiver == null || transceiver.getNegotiatedCodecType() == null) {
-            return CodecType.UNKNOWN;
-        }
-        return transceiver.getNegotiatedCodecType();
-    }
-
-    private int resolvePayloadType(RTCRtpTransceiver transceiver, CodecType codecType) {
-        if (transceiver != null && transceiver.getNegotiatedPayloadType() != null) {
-            return transceiver.getNegotiatedPayloadType().intValue();
-        }
-        return RtpPayloadTypeResolver.resolve(codecType);
-    }
-
-    private int resolveClockRate(RTCRtpTransceiver transceiver, InboundMediaFrame frame) {
-        if (transceiver != null && transceiver.getNegotiatedClockRate() != null && transceiver.getNegotiatedClockRate().intValue() > 0) {
-            return transceiver.getNegotiatedClockRate().intValue();
-        }
-        return defaultClockRate(frame);
-    }
-
-    private Long mediaTimestampMillis(InboundMediaFrame frame) {
-        if (frame == null) {
-            return null;
-        }
-        return frame.ptsMillis() == null ? frame.dtsMillis() : frame.ptsMillis();
-    }
-
-    private static String normalizeTrackId(String trackId) {
-        return trackId == null ? "" : trackId.trim();
-    }
 
     @Override
     public void close() {
@@ -694,57 +692,5 @@ public final class ServerWebRtcPeerSession implements AutoCloseable {
         }
         peerConnection.close();
         datagramIo.close();
-    }
-
-    private static final class SentSrtpPacketCache {
-        private final int capacity;
-        private final long maxAgeMs;
-        private final LinkedHashMap<Integer, CachedSrtpPacket> packets = new LinkedHashMap<Integer, CachedSrtpPacket>(128, 0.75f, true);
-
-        private SentSrtpPacketCache(int capacity, long maxAgeMs) {
-            this.capacity = Math.max(1, capacity);
-            this.maxAgeMs = Math.max(1L, maxAgeMs);
-        }
-
-        private synchronized void put(int sequenceNumber, byte[] packet, long nowMs) {
-            if (packet == null || packet.length == 0) {
-                return;
-            }
-            evictExpired(nowMs);
-            packets.put(Integer.valueOf(sequenceNumber & 0xFFFF), new CachedSrtpPacket(Arrays.copyOf(packet, packet.length), nowMs));
-            while (packets.size() > capacity) {
-                Integer eldest = packets.keySet().iterator().next();
-                packets.remove(eldest);
-            }
-        }
-
-        private synchronized byte[] get(int sequenceNumber, long nowMs) {
-            evictExpired(nowMs);
-            CachedSrtpPacket packet = packets.get(Integer.valueOf(sequenceNumber & 0xFFFF));
-            if (packet == null) {
-                return null;
-            }
-            return Arrays.copyOf(packet.packet, packet.packet.length);
-        }
-
-        private void evictExpired(long nowMs) {
-            while (!packets.isEmpty()) {
-                Map.Entry<Integer, CachedSrtpPacket> eldest = packets.entrySet().iterator().next();
-                if (nowMs - eldest.getValue().sentAtMs <= maxAgeMs) {
-                    return;
-                }
-                packets.remove(eldest.getKey());
-            }
-        }
-    }
-
-    private static final class CachedSrtpPacket {
-        private final byte[] packet;
-        private final long sentAtMs;
-
-        private CachedSrtpPacket(byte[] packet, long sentAtMs) {
-            this.packet = packet;
-            this.sentAtMs = sentAtMs;
-        }
     }
 }

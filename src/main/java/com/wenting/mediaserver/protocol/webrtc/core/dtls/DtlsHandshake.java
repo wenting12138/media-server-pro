@@ -61,7 +61,7 @@ public class DtlsHandshake {
             new int[]{SRTPProtectionProfile.SRTP_AES128_CM_HMAC_SHA1_80},
             new byte[0]);
 
-        LOG.info("DTLS handshake begin role={}", isServer ? "server" : "client");
+        LOG.debug("DTLS handshake begin role={}", isServer ? "server" : "client");
 
         if (isServer) {
             CertCredentials credentials = certCredentials != null
@@ -72,13 +72,13 @@ public class DtlsHandshake {
             DTLSServerProtocol protocol = new DTLSServerProtocol();
             this.dtlsTransport = protocol.accept(server, transport);
             this.srtpKeyMaterial = server.getSrtpKeyMaterial();
-            LOG.info("DTLS handshake finished role=server");
+            LOG.debug("DTLS handshake finished role=server");
         } else {
             MyTlsClient client = new MyTlsClient(crypto, srtpData);
             DTLSClientProtocol protocol = new DTLSClientProtocol();
             this.dtlsTransport = protocol.connect(client, transport);
             this.srtpKeyMaterial = client.getSrtpKeyMaterial();
-            LOG.info("DTLS handshake finished role=client");
+            LOG.debug("DTLS handshake finished role=client");
         }
     }
 
@@ -326,7 +326,7 @@ public class DtlsHandshake {
             super.notifyHandshakeComplete();
             this.srtpKeyMaterial = context.exportKeyingMaterial(
                 ExporterLabel.dtls_srtp, null, DTLS_SRTP_EXPORTER_LEN);
-            LOG.info("DTLS server handshake complete");
+            LOG.debug("DTLS server handshake complete");
         }
 
         @Override

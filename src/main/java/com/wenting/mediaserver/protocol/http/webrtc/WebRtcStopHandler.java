@@ -3,8 +3,8 @@ package com.wenting.mediaserver.protocol.http.webrtc;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.wenting.mediaserver.protocol.http.HttpRequestHandler;
-import com.wenting.mediaserver.protocol.webrtc.ServerWebRtcPeerSession;
-import com.wenting.mediaserver.protocol.webrtc.WebRtcSessionManager;
+import com.wenting.mediaserver.protocol.webrtc.WebRtcPlaybackPeerSession;
+import com.wenting.mediaserver.protocol.webrtc.WebRtcPlaybackSessionManager;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
@@ -24,9 +24,9 @@ public final class WebRtcStopHandler implements HttpRequestHandler {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final String STOP_PATH = "/webrtc/stop";
 
-    private final WebRtcSessionManager sessionManager;
+    private final WebRtcPlaybackSessionManager sessionManager;
 
-    public WebRtcStopHandler(WebRtcSessionManager sessionManager) {
+    public WebRtcStopHandler(WebRtcPlaybackSessionManager sessionManager) {
         this.sessionManager = sessionManager;
     }
 
@@ -45,7 +45,7 @@ public final class WebRtcStopHandler implements HttpRequestHandler {
             writeJson(ctx, HttpResponseStatus.BAD_REQUEST, "{\"code\":-1,\"msg\":\"missing sessionId\"}");
             return;
         }
-        ServerWebRtcPeerSession removed = sessionManager == null ? null : sessionManager.removeAndClose(sessionId);
+        WebRtcPlaybackPeerSession removed = sessionManager == null ? null : sessionManager.removeAndClose(sessionId);
         if (removed == null) {
             writeJson(ctx, HttpResponseStatus.NOT_FOUND, "{\"code\":-1,\"msg\":\"session not found\"}");
             return;

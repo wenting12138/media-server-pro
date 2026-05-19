@@ -12,7 +12,7 @@ import com.wenting.mediaserver.core.registry.StreamRegistry;
 import com.wenting.mediaserver.protocol.http.flv.HttpFlvHandler;
 import com.wenting.mediaserver.protocol.http.hls.HlsHandler;
 import com.wenting.mediaserver.protocol.http.hls.HlsSessionManager;
-import com.wenting.mediaserver.protocol.webrtc.WebRtcSessionManager;
+import com.wenting.mediaserver.protocol.webrtc.WebRtcPlaybackSessionManager;
 import com.wenting.mediaserver.protocol.webrtc.WebRtcPublishSessionManager;
 import com.wenting.mediaserver.protocol.webrtc.transport.DatagramIoSender;
 import io.netty.bootstrap.ServerBootstrap;
@@ -42,7 +42,7 @@ public class HttpBootstrap implements IServerBootstrap {
     private final MediaServerConfig config;
     private final StreamRegistry registry;
     private final HlsSessionManager hlsSessionManager;
-    private final WebRtcSessionManager webRtcSessionManager;
+    private final WebRtcPlaybackSessionManager webRtcPlaybackSessionManager;
     private final WebRtcPublishSessionManager webRtcPublishSessionManager;
     private final WebRtcPlayHandler webRtcPlayHandler;
     private final WebRtcPublishHandler webRtcPublishHandler;
@@ -51,7 +51,7 @@ public class HttpBootstrap implements IServerBootstrap {
     public HttpBootstrap(
             MediaServerConfig config,
             StreamRegistry registry,
-            WebRtcSessionManager webRtcSessionManager,
+            WebRtcPlaybackSessionManager webRtcPlaybackSessionManager,
             WebRtcPublishSessionManager webRtcPublishSessionManager,
             DatagramIoSender datagramIoSender,
             InetSocketAddress webRtcLocalAddress
@@ -61,11 +61,11 @@ public class HttpBootstrap implements IServerBootstrap {
         this.hlsSessionManager = config.hlsFileStorageEnabled()
                 ? new HlsSessionManager(registry, Paths.get(config.hlsDirectory()))
                 : new HlsSessionManager(registry);
-        this.webRtcSessionManager = webRtcSessionManager == null ? new WebRtcSessionManager() : webRtcSessionManager;
+        this.webRtcPlaybackSessionManager = webRtcPlaybackSessionManager == null ? new WebRtcPlaybackSessionManager() : webRtcPlaybackSessionManager;
         this.webRtcPublishSessionManager = webRtcPublishSessionManager == null ? new WebRtcPublishSessionManager() : webRtcPublishSessionManager;
         this.webRtcPlayHandler = new WebRtcPlayHandler(
                 registry,
-                this.webRtcSessionManager,
+                this.webRtcPlaybackSessionManager,
                 webRtcLocalAddress == null ? new InetSocketAddress(config.webrtcPublicIp(), config.webrtcUdpPort()) : webRtcLocalAddress,
                 datagramIoSender == null ? new DatagramIoSender() {
                     @Override
@@ -92,7 +92,7 @@ public class HttpBootstrap implements IServerBootstrap {
         ServerBootstrap http = new ServerBootstrap();
         http.group(boss, worker)
                 .channel(NioServerSocketChannel.class)
-                .handler(new LoggingHandler(LogLevel.INFO))
+                .handler(new LoggingHandler(LogLevel.DEBUG))
                 .childHandler(new ChannelInitializer<SocketChannel>() {
                     @Override
                     protected void initChannel(SocketChannel ch) {
@@ -103,7 +103,7 @@ public class HttpBootstrap implements IServerBootstrap {
                                 webRtcPublishHandler,
                                 webRtcPlayHandler,
                                 new WebRtcUnpublishHandler(HttpBootstrap.this.webRtcPublishSessionManager),
-                                new WebRtcStopHandler(HttpBootstrap.this.webRtcSessionManager),
+                                new WebRtcStopHandler(HttpBootstrap.this.webRtcPlaybackSessionManager),
                                 new WebRtcTestPageHandler(),
                                 new HlsHandler(registry, hlsSessionManager),
                                 new HttpFlvHandler(registry),
@@ -129,7 +129,7 @@ public class HttpBootstrap implements IServerBootstrap {
             this.httpChannel.close();
         }
         this.hlsSessionManager.close();
-        this.webRtcSessionManager.close();
+        this.webRtcPlaybackSessionManager.close();
         this.webRtcPublishSessionManager.close();
         this.worker.shutdownGracefully();
         this.boss.shutdownGracefully();

@@ -9,9 +9,9 @@ import com.wenting.mediaserver.core.publish.MediaSubscriberAdapter;
  */
 public final class WebRtcSubscriberAdapter implements MediaSubscriberAdapter {
 
-    private final ServerWebRtcPeerSession session;
+    private final WebRtcPlaybackPeerSession session;
 
-    public WebRtcSubscriberAdapter(ServerWebRtcPeerSession session) {
+    public WebRtcSubscriberAdapter(WebRtcPlaybackPeerSession session) {
         if (session == null) {
             throw new IllegalArgumentException("session must not be null");
         }

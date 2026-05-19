@@ -10,13 +10,13 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * In-memory server-side WebRTC session index.
  */
-public final class WebRtcSessionManager implements AutoCloseable {
+public final class WebRtcPlaybackSessionManager implements AutoCloseable {
 
-    private final Map<String, ServerWebRtcPeerSession> sessionsById = new ConcurrentHashMap<String, ServerWebRtcPeerSession>();
-    private final Map<String, ServerWebRtcPeerSession> sessionsByLocalUfrag = new ConcurrentHashMap<String, ServerWebRtcPeerSession>();
-    private final Map<InetSocketAddress, ServerWebRtcPeerSession> sessionsByRemoteAddress = new ConcurrentHashMap<InetSocketAddress, ServerWebRtcPeerSession>();
+    private final Map<String, WebRtcPlaybackPeerSession> sessionsById = new ConcurrentHashMap<String, WebRtcPlaybackPeerSession>();
+    private final Map<String, WebRtcPlaybackPeerSession> sessionsByLocalUfrag = new ConcurrentHashMap<String, WebRtcPlaybackPeerSession>();
+    private final Map<InetSocketAddress, WebRtcPlaybackPeerSession> sessionsByRemoteAddress = new ConcurrentHashMap<InetSocketAddress, WebRtcPlaybackPeerSession>();
 
-    public void register(ServerWebRtcPeerSession session) {
+    public void register(WebRtcPlaybackPeerSession session) {
         if (session == null) {
             return;
         }
@@ -27,26 +27,26 @@ public final class WebRtcSessionManager implements AutoCloseable {
         }
     }
 
-    public ServerWebRtcPeerSession find(String sessionId) {
+    public WebRtcPlaybackPeerSession find(String sessionId) {
         return sessionId == null ? null : sessionsById.get(sessionId);
     }
 
-    public ServerWebRtcPeerSession findByLocalUfrag(String localUfrag) {
+    public WebRtcPlaybackPeerSession findByLocalUfrag(String localUfrag) {
         return localUfrag == null ? null : sessionsByLocalUfrag.get(localUfrag);
     }
 
-    public ServerWebRtcPeerSession remove(String sessionId) {
+    public WebRtcPlaybackPeerSession remove(String sessionId) {
         if (sessionId == null) {
             return null;
         }
-        ServerWebRtcPeerSession removed = sessionsById.remove(sessionId);
+        WebRtcPlaybackPeerSession removed = sessionsById.remove(sessionId);
         if (removed != null) {
             String localUfrag = removed.peerConnection().getLocalUfrag();
             if (localUfrag != null) {
                 sessionsByLocalUfrag.remove(localUfrag);
             }
             if (removed.peerConnection() != null) {
-                for (Map.Entry<InetSocketAddress, ServerWebRtcPeerSession> entry : sessionsByRemoteAddress.entrySet()) {
+                for (Map.Entry<InetSocketAddress, WebRtcPlaybackPeerSession> entry : sessionsByRemoteAddress.entrySet()) {
                     if (entry != null && entry.getValue() == removed) {
                         sessionsByRemoteAddress.remove(entry.getKey());
                     }
@@ -56,22 +56,22 @@ public final class WebRtcSessionManager implements AutoCloseable {
         return removed;
     }
 
-    public ServerWebRtcPeerSession removeAndClose(String sessionId) {
-        ServerWebRtcPeerSession removed = remove(sessionId);
+    public WebRtcPlaybackPeerSession removeAndClose(String sessionId) {
+        WebRtcPlaybackPeerSession removed = remove(sessionId);
         if (removed != null) {
             removed.close();
         }
         return removed;
     }
 
-    public void bindRemoteAddress(ServerWebRtcPeerSession session, InetSocketAddress remoteAddress) {
+    public void bindRemoteAddress(WebRtcPlaybackPeerSession session, InetSocketAddress remoteAddress) {
         if (session == null || remoteAddress == null) {
             return;
         }
         sessionsByRemoteAddress.put(remoteAddress, session);
     }
 
-    public ServerWebRtcPeerSession findByRemoteAddress(InetSocketAddress remoteAddress) {
+    public WebRtcPlaybackPeerSession findByRemoteAddress(InetSocketAddress remoteAddress) {
         return remoteAddress == null ? null : sessionsByRemoteAddress.get(remoteAddress);
     }
 
@@ -79,13 +79,13 @@ public final class WebRtcSessionManager implements AutoCloseable {
         return sessionsById.size();
     }
 
-    public Collection<ServerWebRtcPeerSession> sessions() {
-        return Collections.unmodifiableCollection(new LinkedHashMap<String, ServerWebRtcPeerSession>(sessionsById).values());
+    public Collection<WebRtcPlaybackPeerSession> sessions() {
+        return Collections.unmodifiableCollection(new LinkedHashMap<String, WebRtcPlaybackPeerSession>(sessionsById).values());
     }
 
     @Override
     public void close() {
-        for (ServerWebRtcPeerSession session : new LinkedHashMap<String, ServerWebRtcPeerSession>(sessionsById).values()) {
+        for (WebRtcPlaybackPeerSession session : new LinkedHashMap<String, WebRtcPlaybackPeerSession>(sessionsById).values()) {
             if (session != null) {
                 removeAndClose(session.sessionId());
             }

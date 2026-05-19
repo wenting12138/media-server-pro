@@ -3,6 +3,7 @@ package com.wenting.mediaserver.protocol.webrtc;
 import com.wenting.mediaserver.protocol.webrtc.core.stun.StunConstants;
 import com.wenting.mediaserver.protocol.webrtc.core.stun.StunMessage;
 import com.wenting.mediaserver.protocol.webrtc.transport.UdpTransport;
+import com.wenting.mediaserver.protocol.webrtc.util.WebrtcPacketUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -16,14 +17,14 @@ public final class WebRtcUdpPacketHandler implements UdpTransport.PacketHandler 
 
     private static final Logger log = LoggerFactory.getLogger(WebRtcUdpPacketHandler.class);
 
-    private final WebRtcSessionManager sessionManager;
+    private final WebRtcPlaybackSessionManager sessionManager;
     private final WebRtcPublishSessionManager publishSessionManager;
 
-    public WebRtcUdpPacketHandler(WebRtcSessionManager sessionManager) {
+    public WebRtcUdpPacketHandler(WebRtcPlaybackSessionManager sessionManager) {
         this(sessionManager, null);
     }
 
-    public WebRtcUdpPacketHandler(WebRtcSessionManager sessionManager, WebRtcPublishSessionManager publishSessionManager) {
+    public WebRtcUdpPacketHandler(WebRtcPlaybackSessionManager sessionManager, WebRtcPublishSessionManager publishSessionManager) {
         this.sessionManager = sessionManager;
         this.publishSessionManager = publishSessionManager;
     }
@@ -33,11 +34,11 @@ public final class WebRtcUdpPacketHandler implements UdpTransport.PacketHandler 
         if (data == null || data.length == 0) {
             return;
         }
-        if (isStunPacket(data)) {
+        if (WebrtcPacketUtil.isStunPacket(data)) {
             handleStunPacket(data, remoteAddress);
             return;
         }
-        ServerWebRtcPeerSession playSession = sessionManager == null ? null : sessionManager.findByRemoteAddress(remoteAddress);
+        WebRtcPlaybackPeerSession playSession = sessionManager == null ? null : sessionManager.findByRemoteAddress(remoteAddress);
         if (playSession != null) {
             playSession.receive(data, remoteAddress);
             return;
@@ -69,7 +70,7 @@ public final class WebRtcUdpPacketHandler implements UdpTransport.PacketHandler 
         if (sessionManager == null) {
             return false;
         }
-        ServerWebRtcPeerSession session = findPlaySessionByUsername(message);
+        WebRtcPlaybackPeerSession session = findPlaySessionByUsername(message);
         if (session == null) {
             return false;
         }
@@ -91,7 +92,7 @@ public final class WebRtcUdpPacketHandler implements UdpTransport.PacketHandler 
         return true;
     }
 
-    private ServerWebRtcPeerSession findPlaySessionByUsername(StunMessage message) {
+    private WebRtcPlaybackPeerSession findPlaySessionByUsername(StunMessage message) {
         return sessionManager == null ? null : sessionManager.findByLocalUfrag(extractLocalUfrag(message));
     }
 
@@ -105,7 +106,7 @@ public final class WebRtcUdpPacketHandler implements UdpTransport.PacketHandler 
             return null;
         }
         String value = new String(username, StandardCharsets.UTF_8);
-        ServerWebRtcPeerSession playSession = sessionManager == null ? null : sessionManager.findByLocalUfrag(value);
+        WebRtcPlaybackPeerSession playSession = sessionManager == null ? null : sessionManager.findByLocalUfrag(value);
         if (playSession != null) {
             return value;
         }
@@ -130,14 +131,6 @@ public final class WebRtcUdpPacketHandler implements UdpTransport.PacketHandler 
             }
         }
         return null;
-    }
-
-    private static boolean isStunPacket(byte[] data) {
-        return data.length >= 20
-                && data[4] == 0x21
-                && data[5] == 0x12
-                && data[6] == (byte) 0xA4
-                && data[7] == 0x42;
     }
 
 }

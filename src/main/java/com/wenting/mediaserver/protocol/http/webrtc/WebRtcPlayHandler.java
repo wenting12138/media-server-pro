@@ -6,8 +6,8 @@ import com.wenting.mediaserver.core.model.StreamKey;
 import com.wenting.mediaserver.core.publish.IPublishedStream;
 import com.wenting.mediaserver.core.registry.StreamRegistry;
 import com.wenting.mediaserver.protocol.http.HttpRequestHandler;
-import com.wenting.mediaserver.protocol.webrtc.ServerWebRtcPeerSession;
-import com.wenting.mediaserver.protocol.webrtc.WebRtcSessionManager;
+import com.wenting.mediaserver.protocol.webrtc.WebRtcPlaybackPeerSession;
+import com.wenting.mediaserver.protocol.webrtc.WebRtcPlaybackSessionManager;
 import com.wenting.mediaserver.protocol.webrtc.api.MediaStreamTrack;
 import com.wenting.mediaserver.protocol.webrtc.api.RTCPeerConnection;
 import com.wenting.mediaserver.protocol.webrtc.api.RTCRtpTransceiver;
@@ -42,13 +42,13 @@ public final class WebRtcPlayHandler implements HttpRequestHandler {
     private static final String PLAY_PATH = "/webrtc/play";
 
     private final StreamRegistry registry;
-    private final WebRtcSessionManager sessionManager;
+    private final WebRtcPlaybackSessionManager sessionManager;
     private final InetSocketAddress localUdpAddress;
     private final DatagramIoSender datagramSender;
 
     public WebRtcPlayHandler(
             StreamRegistry registry,
-            WebRtcSessionManager sessionManager,
+            WebRtcPlaybackSessionManager sessionManager,
             InetSocketAddress localUdpAddress,
             DatagramIoSender datagramSender
     ) {
@@ -83,7 +83,7 @@ public final class WebRtcPlayHandler implements HttpRequestHandler {
 
         SessionDatagramIo datagramIo = new SessionDatagramIo(localUdpAddress, datagramSender);
         RTCPeerConnection peerConnection = new RTCPeerConnection(datagramIo);
-        ServerWebRtcPeerSession session = null;
+        WebRtcPlaybackPeerSession session = null;
         boolean success = false;
         try {
             RTCSessionDescription offer = new RTCSessionDescription("offer", offerSdp);
@@ -94,7 +94,7 @@ public final class WebRtcPlayHandler implements HttpRequestHandler {
             log.info("coming  offer: \r\n{}",  offer.getSdp());
             log.info("create answer: \r\n{}", answer.getSdp());
 
-            session = new ServerWebRtcPeerSession(
+            session = new WebRtcPlaybackPeerSession(
                     UUID.randomUUID().toString(),
                     new StreamKey(stream.getProtocol(), app, streamName),
                     peerConnection,
@@ -124,7 +124,7 @@ public final class WebRtcPlayHandler implements HttpRequestHandler {
         }
     }
 
-    private void installLifecycleCleanup(ServerWebRtcPeerSession session) {
+    private void installLifecycleCleanup(WebRtcPlaybackPeerSession session) {
         RTCPeerConnection peerConnection = session.peerConnection();
         Consumer<RTCPeerConnection.ConnectionState> previousConnectionHandler = peerConnection.onConnectionStateChange;
         peerConnection.onConnectionStateChange = state -> {
@@ -144,8 +144,8 @@ public final class WebRtcPlayHandler implements HttpRequestHandler {
         };
     }
 
-    private void closeManagedSession(ServerWebRtcPeerSession session) {
-        ServerWebRtcPeerSession removed = sessionManager.removeAndClose(session.sessionId());
+    private void closeManagedSession(WebRtcPlaybackPeerSession session) {
+        WebRtcPlaybackPeerSession removed = sessionManager.removeAndClose(session.sessionId());
         if (removed == null) {
             session.close();
         }
@@ -247,7 +247,7 @@ public final class WebRtcPlayHandler implements HttpRequestHandler {
             return;
         }
         boolean accepted = stream.requestKeyFrame(trackId);
-        log.info("Requested initial WebRTC playback keyframe stream={} track={} accepted={}",
+        log.debug("Requested initial WebRTC playback keyframe stream={} track={} accepted={}",
                 stream, trackId, accepted);
     }
 

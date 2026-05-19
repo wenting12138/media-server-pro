@@ -86,7 +86,7 @@ final class TranscodeWorker implements Runnable {
             publisher.ensureStream(derivedKey);
         }
         worker.thread.start();
-        log.info("Started stream transform worker source={} derived={}", sourceKey, derivedKey);
+        log.debug("Started stream transform worker source={} derived={}", sourceKey, derivedKey);
         return worker;
     }
 
@@ -101,7 +101,7 @@ final class TranscodeWorker implements Runnable {
         if (publisher != null) {
             publisher.removeStream(derivedKey);
         }
-        log.info("Stopped stream transform worker source={} derived={}", sourceKey, derivedKey);
+        log.debug("Stopped stream transform worker source={} derived={}", sourceKey, derivedKey);
     }
 
     boolean requestKeyFrame(String trackId) {
