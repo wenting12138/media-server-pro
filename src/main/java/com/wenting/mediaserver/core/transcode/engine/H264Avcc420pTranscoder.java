@@ -40,6 +40,7 @@ import static org.bytedeco.ffmpeg.global.avcodec.avcodec_receive_packet;
 import static org.bytedeco.ffmpeg.global.avcodec.avcodec_send_frame;
 import static org.bytedeco.ffmpeg.global.avcodec.avcodec_send_packet;
 import static org.bytedeco.ffmpeg.global.avutil.AV_PICTURE_TYPE_I;
+import static org.bytedeco.ffmpeg.global.avutil.AV_PICTURE_TYPE_NONE;
 import static org.bytedeco.ffmpeg.global.avutil.AV_PIX_FMT_NONE;
 import static org.bytedeco.ffmpeg.global.avutil.AV_PIX_FMT_YUV420P;
 import static org.bytedeco.ffmpeg.global.avutil.av_dict_free;
@@ -134,9 +135,9 @@ public final class H264Avcc420pTranscoder implements VideoFrameTranscoder {
                 break;
             }
             boolean forceKeyFrame = forceNextKeyFrameRequested;
+            applyEncodePictureType(frameForEncode, false);
             if (sourceFrame.keyFrame() || forceKeyFrame) {
-                frameForEncode.key_frame(1);
-                frameForEncode.pict_type(AV_PICTURE_TYPE_I);
+                applyEncodePictureType(frameForEncode, true);
                 if (forceKeyFrame) {
                     forceNextKeyFrameRequested = false;
                 }
@@ -436,6 +437,14 @@ public final class H264Avcc420pTranscoder implements VideoFrameTranscoder {
                 new PointerPointer(encFrame.data()),
                 encFrame.linesize());
         return encFrame;
+    }
+
+    private void applyEncodePictureType(AVFrame frame, boolean keyFrame) {
+        if (frame == null) {
+            return;
+        }
+        frame.key_frame(keyFrame ? 1 : 0);
+        frame.pict_type(keyFrame ? AV_PICTURE_TYPE_I : AV_PICTURE_TYPE_NONE);
     }
 
     private AvccTranscodeOutput annexbToAvccPayload(byte[] annexb) {

@@ -10,10 +10,16 @@ import com.wenting.mediaserver.core.transcode.canonical.H264CodecConfig;
 import com.wenting.mediaserver.core.transcode.canonical.VideoPayloadFormat;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
+import org.bytedeco.ffmpeg.avutil.AVFrame;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.Arrays;
+
+import static org.bytedeco.ffmpeg.global.avutil.AV_PICTURE_TYPE_I;
+import static org.bytedeco.ffmpeg.global.avutil.AV_PICTURE_TYPE_NONE;
+import static org.bytedeco.ffmpeg.global.avutil.av_frame_alloc;
+import static org.bytedeco.ffmpeg.global.avutil.av_frame_free;
 
 final class H264Avcc420pTranscoderTest {
 
@@ -126,6 +132,30 @@ final class H264Avcc420pTranscoderTest {
 
             Assertions.assertTrue((Boolean) decoderPrimed.get(transcoder));
         } finally {
+            transcoder.close();
+        }
+    }
+
+    @Test
+    void shouldResetEncodePictureTypeForNonKeyFrames() throws Exception {
+        H264Avcc420pTranscoder transcoder = new H264Avcc420pTranscoder();
+        AVFrame frame = av_frame_alloc();
+        try {
+            Method applyEncodePictureType = H264Avcc420pTranscoder.class.getDeclaredMethod("applyEncodePictureType", AVFrame.class, boolean.class);
+            applyEncodePictureType.setAccessible(true);
+
+            applyEncodePictureType.invoke(transcoder, frame, true);
+            Assertions.assertEquals(1, frame.key_frame());
+            Assertions.assertEquals(AV_PICTURE_TYPE_I, frame.pict_type());
+
+            applyEncodePictureType.invoke(transcoder, frame, false);
+            Assertions.assertEquals(0, frame.key_frame());
+            Assertions.assertEquals(AV_PICTURE_TYPE_NONE, frame.pict_type());
+        } finally {
+            if (frame != null) {
+                AVFrame tmp = frame;
+                av_frame_free(tmp);
+            }
             transcoder.close();
         }
     }
