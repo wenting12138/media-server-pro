@@ -29,7 +29,6 @@ import org.slf4j.LoggerFactory;
 
 import java.net.InetSocketAddress;
 import java.util.UUID;
-import java.util.function.Consumer;
 
 /**
  * Minimal server-side WebRTC play signaling endpoint.
@@ -84,15 +83,14 @@ public final class WebRtcPlayHandler implements HttpRequestHandler {
         SessionDatagramIo datagramIo = new SessionDatagramIo(localUdpAddress, datagramSender);
         RTCPeerConnection peerConnection = new RTCPeerConnection(datagramIo);
         WebRtcPlaybackPeerSession session = null;
-        boolean success = false;
         try {
             RTCSessionDescription offer = new RTCSessionDescription("offer", offerSdp);
             peerConnection.setRemoteDescription(offer);
             configureOutgoingTracks(peerConnection, streamName);
             RTCSessionDescription answer = peerConnection.createAnswer().get();
             peerConnection.setLocalDescription(answer);
-            log.info("coming  offer: \r\n{}",  offer.getSdp());
-            log.info("create answer: \r\n{}", answer.getSdp());
+//            log.info("coming  offer: \r\n{}",  offer.getSdp());
+//            log.info("create answer: \r\n{}", answer.getSdp());
 
             session = new WebRtcPlaybackPeerSession(
                     UUID.randomUUID().toString(),
@@ -100,82 +98,30 @@ public final class WebRtcPlayHandler implements HttpRequestHandler {
                     peerConnection,
                     datagramIo
             );
-            installLifecycleCleanup(session);
-            session.attachPublishedStream(stream);
-            requestInitialVideoKeyFrame(stream);
-            sessionManager.register(session);
-
             String body = OBJECT_MAPPER.writeValueAsString(new PlayResponse(
                     0,
                     "success",
                     new PlayResponseData(session.sessionId(), answer.getType(), answer.getSdp())
             ));
             writeJson(ctx, HttpResponseStatus.OK, body);
-            success = true;
+            WebRtcPlaybackPeerSession managedSession = session;
+            managedSession.installLifecycleCleanup(() -> closeManagedSession(managedSession));
+            session.attachPublishedStream(stream);
+            sessionManager.register(session);
         } finally {
-            if (!success) {
-                if (session != null) {
-                    closeManagedSession(session);
-                } else {
-                    peerConnection.close();
-                    datagramIo.close();
-                }
+            if (session != null) {
+                closeManagedSession(session);
+            } else {
+                peerConnection.close();
+                datagramIo.close();
             }
         }
-    }
-
-    private void installLifecycleCleanup(WebRtcPlaybackPeerSession session) {
-        RTCPeerConnection peerConnection = session.peerConnection();
-        Consumer<RTCPeerConnection.ConnectionState> previousConnectionHandler = peerConnection.onConnectionStateChange;
-        peerConnection.onConnectionStateChange = state -> {
-            invokeConnectionHandler(previousConnectionHandler, state);
-            if (state == RTCPeerConnection.ConnectionState.FAILED
-                    || state == RTCPeerConnection.ConnectionState.CLOSED) {
-                closeManagedSession(session);
-            }
-        };
-        Consumer<RTCPeerConnection.IceConnectionState> previousIceHandler = peerConnection.onIceConnectionStateChange;
-        peerConnection.onIceConnectionStateChange = state -> {
-            invokeIceHandler(previousIceHandler, state);
-            if (state == RTCPeerConnection.IceConnectionState.FAILED
-                    || state == RTCPeerConnection.IceConnectionState.CLOSED) {
-                closeManagedSession(session);
-            }
-        };
     }
 
     private void closeManagedSession(WebRtcPlaybackPeerSession session) {
         WebRtcPlaybackPeerSession removed = sessionManager.removeAndClose(session.sessionId());
         if (removed == null) {
             session.close();
-        }
-    }
-
-    private void invokeConnectionHandler(
-            Consumer<RTCPeerConnection.ConnectionState> handler,
-            RTCPeerConnection.ConnectionState state
-    ) {
-        if (handler == null) {
-            return;
-        }
-        try {
-            handler.accept(state);
-        } catch (RuntimeException e) {
-            log.warn("WebRTC connection-state callback failed: {}", e.getMessage(), e);
-        }
-    }
-
-    private void invokeIceHandler(
-            Consumer<RTCPeerConnection.IceConnectionState> handler,
-            RTCPeerConnection.IceConnectionState state
-    ) {
-        if (handler == null) {
-            return;
-        }
-        try {
-            handler.accept(state);
-        } catch (RuntimeException e) {
-            log.warn("WebRTC ICE-state callback failed: {}", e.getMessage(), e);
         }
     }
 
@@ -236,19 +182,6 @@ public final class WebRtcPlayHandler implements HttpRequestHandler {
         }
         int queryIndex = uri.indexOf('?');
         return queryIndex >= 0 ? uri.substring(0, queryIndex) : uri;
-    }
-
-    private void requestInitialVideoKeyFrame(IPublishedStream stream) {
-        if (stream == null) {
-            return;
-        }
-        String trackId = stream.firstVideoTrackId();
-        if (trackId == null || trackId.trim().isEmpty()) {
-            return;
-        }
-        boolean accepted = stream.requestKeyFrame(trackId);
-        log.debug("Requested initial WebRTC playback keyframe stream={} track={} accepted={}",
-                stream, trackId, accepted);
     }
 
     private static final class PlayResponse {

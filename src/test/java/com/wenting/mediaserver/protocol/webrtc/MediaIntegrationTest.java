@@ -108,14 +108,14 @@ public class MediaIntegrationTest {
             AtomicReference<byte[]> receivedAudioPayload = new AtomicReference<>();
             AtomicReference<byte[]> receivedVideoPayload = new AtomicReference<>();
 
-            pc1.onIceCandidate = c -> candidates1.add(c);
-            pc2.onIceCandidate = c -> candidates2.add(c);
-            pc1.onConnectionStateChange = s -> {
+            pc1.addIceCandidateListener(c -> candidates1.add(c));
+            pc2.addIceCandidateListener(c -> candidates2.add(c));
+            pc1.addConnectionStateListener(s -> {
                 if (s == RTCPeerConnection.ConnectionState.CONNECTED) pc1Connected.countDown();
-            };
-            pc2.onConnectionStateChange = s -> {
+            });
+            pc2.addConnectionStateListener(s -> {
                 if (s == RTCPeerConnection.ConnectionState.CONNECTED) pc2Connected.countDown();
-            };
+            });
 
             // ---- Add media tracks to PC1 ----
             MediaStreamTrack audioTrack = new MediaStreamTrack(
@@ -126,7 +126,7 @@ public class MediaIntegrationTest {
             pc1.addTrack(videoTrack);
 
             // ---- Set up ontrack on PC2 ----
-            pc2.ontrack = receiver -> {
+            pc2.addTrackListener(receiver -> {
                 MediaStreamTrack.Kind kind = receiver.getTrack().getKind();
                 if (kind == MediaStreamTrack.Kind.AUDIO) {
                     audioTrackReceived.countDown();
@@ -141,7 +141,7 @@ public class MediaIntegrationTest {
                         videoPacketReceived.countDown();
                     });
                 }
-            };
+            });
 
             // ---- SDP offer/answer exchange ----
             RTCSessionDescription offer = pc1.createOffer().get();
@@ -231,25 +231,25 @@ public class MediaIntegrationTest {
             AtomicReference<byte[]> pc2AudioPayload = new AtomicReference<>();
             AtomicReference<byte[]> pc1VideoPayload = new AtomicReference<>();
 
-            pc1.onIceCandidate = c -> candidates1.add(c);
-            pc2.onIceCandidate = c -> candidates2.add(c);
-            pc1.onConnectionStateChange = s -> {
+            pc1.addIceCandidateListener(c -> candidates1.add(c));
+            pc2.addIceCandidateListener(c -> candidates2.add(c));
+            pc1.addConnectionStateListener(s -> {
                 if (s == RTCPeerConnection.ConnectionState.CONNECTED) bothConnected.countDown();
-            };
-            pc2.onConnectionStateChange = s -> {
+            });
+            pc2.addConnectionStateListener(s -> {
                 if (s == RTCPeerConnection.ConnectionState.CONNECTED) bothConnected.countDown();
-            };
+            });
 
             // PC1 sends audio, PC2 sends video
             pc1.addTrack(new MediaStreamTrack(MediaStreamTrack.Kind.AUDIO, "pc1-audio"));
-            pc2.ontrack = receiver -> {
+            pc2.addTrackListener(receiver -> {
                 if (receiver.getTrack().getKind() == MediaStreamTrack.Kind.AUDIO) {
                     receiver.setOnPacket(pkt -> {
                         pc2AudioPayload.set(pkt.getPayload());
                         pc2ReceivedAudio.countDown();
                     });
                 }
-            };
+            });
 
             RTCSessionDescription offer = pc1.createOffer().get();
             pc1.setLocalDescription(offer);
@@ -258,14 +258,14 @@ public class MediaIntegrationTest {
             // PC2 adds video track (now it has transceivers from parsing offer)
             pc2.addTrack(new MediaStreamTrack(MediaStreamTrack.Kind.VIDEO, "pc2-video"));
 
-            pc1.ontrack = receiver -> {
+            pc1.addTrackListener(receiver -> {
                 if (receiver.getTrack().getKind() == MediaStreamTrack.Kind.VIDEO) {
                     receiver.setOnPacket(pkt -> {
                         pc1VideoPayload.set(pkt.getPayload());
                         pc1ReceivedVideo.countDown();
                     });
                 }
-            };
+            });
 
             RTCSessionDescription answer = pc2.createAnswer().get();
             pc2.setLocalDescription(answer);

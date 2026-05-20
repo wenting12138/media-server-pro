@@ -24,7 +24,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.function.Consumer;
 
 /**
  * Server-side WebRTC publish session that forwards inbound SRTP media into a published stream.
@@ -40,9 +39,14 @@ public final class WebRtcPublishPeerSession implements AutoCloseable {
     private final StreamRegistry registry;
     private final WebRtcIngestFeedbackController feedbackController;
     private final ScheduledExecutorService feedbackExecutor;
+    private final AtomicBoolean lifecycleCleanupInstalled = new AtomicBoolean(false);
+    private final RTCPeerConnection.ListenerSubscription rtcpPacketSubscription;
+    private final AtomicBoolean ingestActivated = new AtomicBoolean(false);
     private final AtomicBoolean closed = new AtomicBoolean(false);
     private volatile IPublishedStream publishedStream;
     private volatile InetSocketAddress remoteAddress;
+    private volatile RTCPeerConnection.ListenerSubscription connectionStateSubscription;
+    private volatile RTCPeerConnection.ListenerSubscription iceStateSubscription;
 
     public WebRtcPublishPeerSession(
             String sessionId,
@@ -63,7 +67,7 @@ public final class WebRtcPublishPeerSession implements AutoCloseable {
             return t;
         });
         bindReceivers();
-        bindRtcpListener();
+        this.rtcpPacketSubscription = bindRtcpListener();
         feedbackExecutor.scheduleAtFixedRate(
                 feedbackController::runPeriodicTasks,
                 FEEDBACK_TICK_INTERVAL_MS,
@@ -86,6 +90,37 @@ public final class WebRtcPublishPeerSession implements AutoCloseable {
 
     public void attachPublishedStream(IPublishedStream stream) {
         this.publishedStream = stream;
+    }
+
+    public void activateIngest() {
+        if (closed.get()) {
+            return;
+        }
+        ingestActivated.set(true);
+    }
+
+    public void installLifecycleCleanup(Runnable cleanupAction) {
+        if (cleanupAction == null || !lifecycleCleanupInstalled.compareAndSet(false, true)) {
+            return;
+        }
+        connectionStateSubscription = peerConnection.addConnectionStateListener(state -> {
+            if (state == RTCPeerConnection.ConnectionState.CONNECTED) {
+                activateIngest();
+            }
+            if (state == RTCPeerConnection.ConnectionState.FAILED
+                    || state == RTCPeerConnection.ConnectionState.CLOSED) {
+                runCleanupAction(cleanupAction);
+            }
+        });
+        iceStateSubscription = peerConnection.addIceConnectionStateListener(state -> {
+            if (state == RTCPeerConnection.IceConnectionState.FAILED
+                    || state == RTCPeerConnection.IceConnectionState.CLOSED) {
+                runCleanupAction(cleanupAction);
+            }
+        });
+        if (peerConnection.getConnectionState() == RTCPeerConnection.ConnectionState.CONNECTED) {
+            activateIngest();
+        }
     }
 
     public void receive(byte[] data, InetSocketAddress remoteAddress) {
@@ -122,10 +157,13 @@ public final class WebRtcPublishPeerSession implements AutoCloseable {
         if (!closed.compareAndSet(false, true)) {
             return;
         }
+        closeSubscription(connectionStateSubscription);
+        closeSubscription(iceStateSubscription);
         IPublishedStream stream = publishedStream;
         if (stream != null && registry.findPublishedStream(streamKey) == stream) {
             registry.removePublishedStream(streamKey);
         }
+        rtcpPacketSubscription.close();
         feedbackExecutor.shutdownNow();
         peerConnection.close();
         datagramIo.close();
@@ -145,18 +183,25 @@ public final class WebRtcPublishPeerSession implements AutoCloseable {
         }
     }
 
-    private void bindRtcpListener() {
-        Consumer<RtcpPacket> previous = peerConnection.onRtcpPacket;
-        peerConnection.onRtcpPacket = packet -> {
-            if (previous != null) {
-                previous.accept(packet);
-            }
+    private RTCPeerConnection.ListenerSubscription bindRtcpListener() {
+        return peerConnection.addRtcpPacketListener(packet -> {
             feedbackController.onRtcpPacket(packet);
-        };
+        });
+    }
+
+    private void runCleanupAction(Runnable cleanupAction) {
+        try {
+            cleanupAction.run();
+        } catch (RuntimeException e) {
+            // publish teardown should not break connection threads
+        }
     }
 
     private void handleInboundRtp(RTCRtpTransceiver transceiver, RTCRtpReceiver receiver, RtpPacket rtpPacket) {
         if (closed.get() || transceiver == null || receiver == null || rtpPacket == null) {
+            return;
+        }
+        if (!ingestActivated.get()) {
             return;
         }
         if (!canReceive(transceiver)) {
@@ -242,5 +287,16 @@ public final class WebRtcPublishPeerSession implements AutoCloseable {
                     : "video-" + mid.trim();
         }
         return receiver.getTrack() == null ? "" : receiver.getTrack().getId();
+    }
+
+    private void closeSubscription(RTCPeerConnection.ListenerSubscription subscription) {
+        if (subscription == null) {
+            return;
+        }
+        try {
+            subscription.close();
+        } catch (RuntimeException ignore) {
+            // ignore listener shutdown races during session close
+        }
     }
 }

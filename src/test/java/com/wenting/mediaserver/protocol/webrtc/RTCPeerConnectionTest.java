@@ -8,11 +8,13 @@ import com.wenting.mediaserver.protocol.webrtc.core.sdp.SdpParser;
 import com.wenting.mediaserver.protocol.webrtc.util.WebrtcSdpUtil;
 import org.junit.Test;
 
+import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.Assert.*;
@@ -81,6 +83,41 @@ public class RTCPeerConnectionTest {
             assertNotNull(dc);
             assertEquals("test-channel", dc.getLabel());
             assertEquals(DataChannel.State.CONNECTING, dc.getState());
+        } finally {
+            pc.close();
+        }
+    }
+
+    @Test
+    public void testConnectionStateSupportsMultipleListeners() throws Exception {
+        RTCPeerConnection pc = new RTCPeerConnection();
+        try {
+            AtomicInteger listenerCalls = new AtomicInteger(0);
+            AtomicReference<RTCPeerConnection.ConnectionState> first = new AtomicReference<>();
+            AtomicReference<RTCPeerConnection.ConnectionState> second = new AtomicReference<>();
+
+            RTCPeerConnection.ListenerSubscription firstSubscription =
+                    pc.addConnectionStateListener(state -> {
+                        first.set(state);
+                        listenerCalls.incrementAndGet();
+                    });
+            pc.addConnectionStateListener(state -> {
+                second.set(state);
+                listenerCalls.incrementAndGet();
+            });
+
+            emitConnectionState(pc, RTCPeerConnection.ConnectionState.CONNECTED);
+
+            assertEquals(RTCPeerConnection.ConnectionState.CONNECTED, first.get());
+            assertEquals(RTCPeerConnection.ConnectionState.CONNECTED, second.get());
+            assertEquals(2, listenerCalls.get());
+
+            firstSubscription.close();
+            emitConnectionState(pc, RTCPeerConnection.ConnectionState.FAILED);
+
+            assertEquals(RTCPeerConnection.ConnectionState.CONNECTED, first.get());
+            assertEquals(RTCPeerConnection.ConnectionState.FAILED, second.get());
+            assertEquals(3, listenerCalls.get());
         } finally {
             pc.close();
         }
@@ -159,14 +196,14 @@ public class RTCPeerConnectionTest {
             CountDownLatch pc1Connected = new CountDownLatch(1);
             CountDownLatch pc2Connected = new CountDownLatch(1);
 
-            pc1.onIceCandidate = c -> candidates1.add(c);
-            pc2.onIceCandidate = c -> candidates2.add(c);
-            pc1.onIceConnectionStateChange = s -> {
+            pc1.addIceCandidateListener(c -> candidates1.add(c));
+            pc2.addIceCandidateListener(c -> candidates2.add(c));
+            pc1.addIceConnectionStateListener(s -> {
                 if (s == RTCPeerConnection.IceConnectionState.CONNECTED) pc1Connected.countDown();
-            };
-            pc2.onIceConnectionStateChange = s -> {
+            });
+            pc2.addIceConnectionStateListener(s -> {
                 if (s == RTCPeerConnection.IceConnectionState.CONNECTED) pc2Connected.countDown();
-            };
+            });
 
             // Create offer
             RTCSessionDescription offer = pc1.createOffer().get();
@@ -220,20 +257,20 @@ public class RTCPeerConnectionTest {
             CountDownLatch msgReceived = new CountDownLatch(1);
             AtomicReference<String> receivedMsg = new AtomicReference<>();
 
-            pc1.onIceCandidate = c -> candidates1.add(c);
-            pc2.onIceCandidate = c -> candidates2.add(c);
-            pc1.onIceConnectionStateChange = s -> {
+            pc1.addIceCandidateListener(c -> candidates1.add(c));
+            pc2.addIceCandidateListener(c -> candidates2.add(c));
+            pc1.addIceConnectionStateListener(s -> {
                 if (s == RTCPeerConnection.IceConnectionState.CONNECTED) pc1Ice.countDown();
-            };
-            pc2.onIceConnectionStateChange = s -> {
+            });
+            pc2.addIceConnectionStateListener(s -> {
                 if (s == RTCPeerConnection.IceConnectionState.CONNECTED) pc2Ice.countDown();
-            };
-            pc1.onConnectionStateChange = s -> {
+            });
+            pc1.addConnectionStateListener(s -> {
                 if (s == RTCPeerConnection.ConnectionState.CONNECTED) pc1Ready.countDown();
-            };
-            pc2.onConnectionStateChange = s -> {
+            });
+            pc2.addConnectionStateListener(s -> {
                 if (s == RTCPeerConnection.ConnectionState.CONNECTED) pc2Ready.countDown();
-            };
+            });
 
             // SDP offer/answer exchange
             RTCSessionDescription offer = pc1.createOffer().get();
@@ -260,13 +297,13 @@ public class RTCPeerConnectionTest {
                 pc2Ready.await(10, TimeUnit.SECONDS));
 
             // Set up DataChannel handler on PC2 before creating DC on PC1
-            pc2.onDataChannel = dc -> {
+            pc2.addDataChannelListener(dc -> {
                 dcReceived.countDown();
                 dc.setMessageHandler((data, isBinary) -> {
                     receivedMsg.set(new String(data, StandardCharsets.UTF_8));
                     msgReceived.countDown();
                 });
-            };
+            });
 
             // Create DataChannel on PC1 and send message
             DataChannel dc = pc1.createDataChannel("test");
@@ -298,24 +335,24 @@ public class RTCPeerConnectionTest {
             CountDownLatch msgReceived = new CountDownLatch(1);
             AtomicReference<String> receivedMsg = new AtomicReference<>();
 
-            pc1.onIceConnectionStateChange = s -> {
+            pc1.addIceConnectionStateListener(s -> {
                 if (s == RTCPeerConnection.IceConnectionState.CONNECTED
                     || s == RTCPeerConnection.IceConnectionState.COMPLETED) {
                     pc1Ice.countDown();
                 }
-            };
-            pc2.onIceConnectionStateChange = s -> {
+            });
+            pc2.addIceConnectionStateListener(s -> {
                 if (s == RTCPeerConnection.IceConnectionState.CONNECTED
                     || s == RTCPeerConnection.IceConnectionState.COMPLETED) {
                     pc2Ice.countDown();
                 }
-            };
-            pc1.onConnectionStateChange = s -> {
+            });
+            pc1.addConnectionStateListener(s -> {
                 if (s == RTCPeerConnection.ConnectionState.CONNECTED) pc1Ready.countDown();
-            };
-            pc2.onConnectionStateChange = s -> {
+            });
+            pc2.addConnectionStateListener(s -> {
                 if (s == RTCPeerConnection.ConnectionState.CONNECTED) pc2Ready.countDown();
-            };
+            });
 
             RTCSessionDescription offer = pc1.createOffer().get();
             pc1.setLocalDescription(offer);
@@ -330,13 +367,13 @@ public class RTCPeerConnectionTest {
             assertTrue("PC1 full connection timeout", pc1Ready.await(20, TimeUnit.SECONDS));
             assertTrue("PC2 full connection timeout", pc2Ready.await(20, TimeUnit.SECONDS));
 
-            pc2.onDataChannel = dc -> {
+            pc2.addDataChannelListener(dc -> {
                 dcReceived.countDown();
                 dc.setMessageHandler((data, isBinary) -> {
                     receivedMsg.set(new String(data, StandardCharsets.UTF_8));
                     msgReceived.countDown();
                 });
-            };
+            });
 
             DataChannel dc = pc1.createDataChannel("sdp-import");
             assertTrue("PC2 should receive DataChannel", dcReceived.await(5, TimeUnit.SECONDS));
@@ -348,5 +385,13 @@ public class RTCPeerConnectionTest {
             pc1.close();
             pc2.close();
         }
+    }
+
+    private static void emitConnectionState(RTCPeerConnection peerConnection,
+                                            RTCPeerConnection.ConnectionState state) throws Exception {
+        Method method = RTCPeerConnection.class.getDeclaredMethod("setConnectionState",
+                RTCPeerConnection.ConnectionState.class);
+        method.setAccessible(true);
+        method.invoke(peerConnection, state);
     }
 }

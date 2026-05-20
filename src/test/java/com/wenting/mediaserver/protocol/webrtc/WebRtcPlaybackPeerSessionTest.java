@@ -69,7 +69,7 @@ public class WebRtcPlaybackPeerSessionTest {
     }
 
     @Test
-    public void shouldAttachAndRemoveSubscriberFromPublishedStream() throws Exception {
+    public void shouldActivateAndRemoveSubscriberFromPublishedStream() throws Exception {
         StubDatagramIo transport = new StubDatagramIo();
         RTCPeerConnection peerConnection = new RTCPeerConnection(transport);
         StreamKey streamKey = new StreamKey(StreamProtocol.RTMP, "live", "cam01");
@@ -93,6 +93,8 @@ public class WebRtcPlaybackPeerSessionTest {
         try {
             session.attachPublishedStream(publishedStream);
 
+            assertEquals(0, publishedStream.subscriberCount());
+            session.activatePlayback();
             assertEquals(1, publishedStream.subscriberCount());
             MediaSubscriberAdapter adapter = session.subscriberAdapter();
             assertEquals("sess-2", adapter.sessionId());

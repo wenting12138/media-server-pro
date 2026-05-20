@@ -9,6 +9,11 @@ import com.wenting.mediaserver.core.registry.StreamRegistry;
 import com.wenting.mediaserver.protocol.http.HttpRouterHandler;
 import com.wenting.mediaserver.protocol.webrtc.WebRtcPublishPeerSession;
 import com.wenting.mediaserver.protocol.webrtc.WebRtcPublishSessionManager;
+import com.wenting.mediaserver.protocol.webrtc.api.MediaStreamTrack;
+import com.wenting.mediaserver.protocol.webrtc.api.RTCPeerConnection;
+import com.wenting.mediaserver.protocol.webrtc.api.RTCRtpReceiver;
+import com.wenting.mediaserver.protocol.webrtc.api.RTCRtpTransceiver;
+import com.wenting.mediaserver.protocol.webrtc.core.rtp.RtpPacket;
 import com.wenting.mediaserver.protocol.webrtc.transport.DatagramIoSender;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.embedded.EmbeddedChannel;
@@ -20,6 +25,7 @@ import io.netty.util.CharsetUtil;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
+import java.lang.reflect.Method;
 import java.util.concurrent.CompletableFuture;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -117,6 +123,40 @@ class WebRtcPublishHandlerTest {
         assertEquals(0, root.get("code").asInt());
         assertEquals(1, sessionManager.count());
         assertNotNull(registry.findPublishedStream(new StreamKey(StreamProtocol.WEBRTC, "live", "cam01")));
+        response.release();
+        channel.finishAndReleaseAll();
+        sessionManager.close();
+    }
+
+    @Test
+    void shouldActivatePublishIngestOnlyAfterPeerConnectionConnected() throws Exception {
+        StreamRegistry registry = new StreamRegistry();
+        WebRtcPublishSessionManager sessionManager = new WebRtcPublishSessionManager();
+        EmbeddedChannel channel = new EmbeddedChannel(
+                new HttpRouterHandler(new WebRtcPublishHandler(
+                        registry,
+                        sessionManager,
+                        new InetSocketAddress("192.168.3.52", 18081),
+                        new NoopDatagramIoSender()
+                ))
+        );
+
+        channel.writeInbound(request("{\"app\":\"live\",\"stream\":\"cam03\",\"sdp\":\"" + escapeJson(publishOfferWithH264()) + "\"}"));
+
+        FullHttpResponse response = channel.readOutbound();
+        assertEquals(200, response.status().code());
+        WebRtcPublishPeerSession session = sessionManager.sessions().iterator().next();
+        IPublishedStream stream = registry.findPublishedStream(new StreamKey(StreamProtocol.WEBRTC, "live", "cam03"));
+        RTCRtpReceiver receiver = firstVideoReceiver(session.peerConnection());
+        assertNotNull(receiver);
+
+        receiver.getOnPacket().accept(videoPacket(0x01020304L, 3000L, 1));
+        assertNull(stream.latestTrackSsrc("video-0"));
+
+        emitConnectionState(session.peerConnection(), RTCPeerConnection.ConnectionState.CONNECTED);
+        receiver.getOnPacket().accept(videoPacket(0x01020304L, 6000L, 2));
+
+        assertEquals(0x01020304L, stream.latestTrackSsrc("video-0"));
         response.release();
         channel.finishAndReleaseAll();
         sessionManager.close();
@@ -281,6 +321,41 @@ class WebRtcPublishHandlerTest {
 
     private static String escapeJson(String value) {
         return value.replace("\\", "\\\\").replace("\"", "\\\"").replace("\r", "\\r").replace("\n", "\\n");
+    }
+
+    private static RTCRtpReceiver firstVideoReceiver(RTCPeerConnection peerConnection) {
+        for (RTCRtpTransceiver transceiver : peerConnection.getTransceivers()) {
+            if (transceiver != null
+                    && transceiver.getKind() == MediaStreamTrack.Kind.VIDEO
+                    && transceiver.getReceiver() != null) {
+                return transceiver.getReceiver();
+            }
+        }
+        return null;
+    }
+
+    private static RtpPacket videoPacket(long ssrc, long timestamp, int sequenceNumber) {
+        return new RtpPacket(
+                2,
+                false,
+                false,
+                0,
+                true,
+                96,
+                sequenceNumber,
+                timestamp,
+                ssrc,
+                null,
+                new byte[]{0x65, 0x11, 0x22, 0x33}
+        );
+    }
+
+    private static void emitConnectionState(RTCPeerConnection peerConnection,
+                                            RTCPeerConnection.ConnectionState state) throws Exception {
+        Method method = RTCPeerConnection.class.getDeclaredMethod("setConnectionState",
+                RTCPeerConnection.ConnectionState.class);
+        method.setAccessible(true);
+        method.invoke(peerConnection, state);
     }
 
     private static final class NoopDatagramIoSender implements DatagramIoSender {

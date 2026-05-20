@@ -32,7 +32,6 @@ import org.slf4j.LoggerFactory;
 
 import java.net.InetSocketAddress;
 import java.util.UUID;
-import java.util.function.Consumer;
 
 /**
  * Minimal server-side WebRTC publish signaling endpoint.
@@ -86,7 +85,6 @@ public final class WebRtcPublishHandler implements HttpRequestHandler {
         RTCPeerConnection peerConnection = new RTCPeerConnection(datagramIo);
         WebRtcPublishPeerSession session = null;
         StreamKey streamKey = new StreamKey(StreamProtocol.WEBRTC, app, streamName);
-        boolean success = false;
         try {
             RTCSessionDescription offer = new RTCSessionDescription("offer", offerSdp);
             peerConnection.setRemoteDescription(offer);
@@ -98,9 +96,7 @@ public final class WebRtcPublishHandler implements HttpRequestHandler {
             peerConnection.setLocalDescription(answer);
 //            log.info("incoming publish offer: \r\n{}", offer.getSdp());
 //            log.info("create publish answer: \r\n{}", answer.getSdp());
-
             IPublishedStream stream = new DefaultPublishedStream(streamKey);
-            registry.registerPublishedStream(streamKey, stream);
             session = new WebRtcPublishPeerSession(
                     UUID.randomUUID().toString(),
                     streamKey,
@@ -108,48 +104,26 @@ public final class WebRtcPublishHandler implements HttpRequestHandler {
                     datagramIo,
                     registry
             );
-            installLifecycleCleanup(session);
-            session.attachPublishedStream(stream);
-            sessionManager.register(session);
-
             String body = OBJECT_MAPPER.writeValueAsString(new PublishResponse(
                     0,
                     "success",
                     new PublishResponseData(session.sessionId(), answer.getType(), answer.getSdp())
             ));
             writeJson(ctx, HttpResponseStatus.OK, body);
-            success = true;
+            WebRtcPublishPeerSession managedSession = session;
+            managedSession.installLifecycleCleanup(() -> closeManagedSession(managedSession));
+            session.attachPublishedStream(stream);
+            sessionManager.register(session);
+            registry.registerPublishedStream(streamKey, stream);
         } finally {
-            if (!success) {
-                if (session != null) {
-                    closeManagedSession(session);
-                } else {
-                    registry.removePublishedStream(streamKey);
-                    peerConnection.close();
-                    datagramIo.close();
-                }
+            if (session != null) {
+                closeManagedSession(session);
+            } else {
+                registry.removePublishedStream(streamKey);
+                peerConnection.close();
+                datagramIo.close();
             }
         }
-    }
-
-    private void installLifecycleCleanup(WebRtcPublishPeerSession session) {
-        RTCPeerConnection peerConnection = session.peerConnection();
-        Consumer<RTCPeerConnection.ConnectionState> previousConnectionHandler = peerConnection.onConnectionStateChange;
-        peerConnection.onConnectionStateChange = state -> {
-            invokeConnectionHandler(previousConnectionHandler, state);
-            if (state == RTCPeerConnection.ConnectionState.FAILED
-                    || state == RTCPeerConnection.ConnectionState.CLOSED) {
-                closeManagedSession(session);
-            }
-        };
-        Consumer<RTCPeerConnection.IceConnectionState> previousIceHandler = peerConnection.onIceConnectionStateChange;
-        peerConnection.onIceConnectionStateChange = state -> {
-            invokeIceHandler(previousIceHandler, state);
-            if (state == RTCPeerConnection.IceConnectionState.FAILED
-                    || state == RTCPeerConnection.IceConnectionState.CLOSED) {
-                closeManagedSession(session);
-            }
-        };
     }
 
     private void closeManagedSession(WebRtcPublishPeerSession session) {
@@ -176,34 +150,6 @@ public final class WebRtcPublishHandler implements HttpRequestHandler {
             }
         }
         return false;
-    }
-
-    private void invokeConnectionHandler(
-            Consumer<RTCPeerConnection.ConnectionState> handler,
-            RTCPeerConnection.ConnectionState state
-    ) {
-        if (handler == null) {
-            return;
-        }
-        try {
-            handler.accept(state);
-        } catch (RuntimeException e) {
-            log.warn("WebRTC publish connection-state callback failed: {}", e.getMessage(), e);
-        }
-    }
-
-    private void invokeIceHandler(
-            Consumer<RTCPeerConnection.IceConnectionState> handler,
-            RTCPeerConnection.IceConnectionState state
-    ) {
-        if (handler == null) {
-            return;
-        }
-        try {
-            handler.accept(state);
-        } catch (RuntimeException e) {
-            log.warn("WebRTC publish ICE-state callback failed: {}", e.getMessage(), e);
-        }
     }
 
     private static void writeJson(ChannelHandlerContext ctx, HttpResponseStatus status, String body) {

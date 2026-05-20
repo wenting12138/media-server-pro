@@ -55,8 +55,8 @@ import static com.wenting.mediaserver.protocol.webrtc.core.sctp.SctpConstants.*;
  *
  * Usage:
  *   RTCPeerConnection pc = new RTCPeerConnection();
- *   pc.onIceCandidate = candidate -> signaling.send(candidate);
- *   pc.onDataChannel = dc -> dc.setMessageHandler(...);
+ *   pc.addIceCandidateListener(candidate -> signaling.send(candidate));
+ *   pc.addDataChannelListener(dc -> dc.setMessageHandler(...));
  *
  *   RTCSessionDescription offer = pc.createOffer().get();
  *   signaling.send(offer);
@@ -71,14 +71,19 @@ public class RTCPeerConnection implements AutoCloseable {
     public enum SignalingState { STABLE, HAVE_LOCAL_OFFER, HAVE_REMOTE_OFFER, CLOSED }
     public enum IceConnectionState { NEW, CHECKING, CONNECTED, COMPLETED, FAILED, CLOSED }
     public enum ConnectionState { NEW, CONNECTING, CONNECTED, FAILED, CLOSED }
+    public interface ListenerSubscription extends AutoCloseable {
+        @Override
+        void close();
+    }
 
     // ---- Event callbacks (JS-style) ----
-    public volatile Consumer<RTCIceCandidate> onIceCandidate;
-    public volatile Consumer<DataChannel> onDataChannel;
-    public volatile Consumer<RTCRtpReceiver> ontrack;
-    public volatile Consumer<RtcpPacket> onRtcpPacket;
-    public volatile Consumer<IceConnectionState> onIceConnectionStateChange;
-    public volatile Consumer<ConnectionState> onConnectionStateChange;
+    private static final ListenerSubscription NOOP_SUBSCRIPTION = () -> { };
+    private final CopyOnWriteArrayList<Consumer<RTCIceCandidate>> iceCandidateListeners = new CopyOnWriteArrayList<>();
+    private final CopyOnWriteArrayList<Consumer<DataChannel>> dataChannelListeners = new CopyOnWriteArrayList<>();
+    private final CopyOnWriteArrayList<Consumer<RTCRtpReceiver>> trackListeners = new CopyOnWriteArrayList<>();
+    private final CopyOnWriteArrayList<Consumer<RtcpPacket>> rtcpPacketListeners = new CopyOnWriteArrayList<>();
+    private final CopyOnWriteArrayList<Consumer<IceConnectionState>> iceConnectionStateListeners = new CopyOnWriteArrayList<>();
+    private final CopyOnWriteArrayList<Consumer<ConnectionState>> connectionStateListeners = new CopyOnWriteArrayList<>();
 
     // ---- Internal components ----
     private final DatagramIo transport;
@@ -382,6 +387,30 @@ public class RTCPeerConnection implements AutoCloseable {
         }
         addRemoteCandidateToIceAgent(candidate);
         maybeStartIceConnectivityChecks();
+    }
+
+    public ListenerSubscription addIceCandidateListener(Consumer<RTCIceCandidate> listener) {
+        return addListener(iceCandidateListeners, listener);
+    }
+
+    public ListenerSubscription addDataChannelListener(Consumer<DataChannel> listener) {
+        return addListener(dataChannelListeners, listener);
+    }
+
+    public ListenerSubscription addTrackListener(Consumer<RTCRtpReceiver> listener) {
+        return addListener(trackListeners, listener);
+    }
+
+    public ListenerSubscription addRtcpPacketListener(Consumer<RtcpPacket> listener) {
+        return addListener(rtcpPacketListeners, listener);
+    }
+
+    public ListenerSubscription addIceConnectionStateListener(Consumer<IceConnectionState> listener) {
+        return addListener(iceConnectionStateListeners, listener);
+    }
+
+    public ListenerSubscription addConnectionStateListener(Consumer<ConnectionState> listener) {
+        return addListener(connectionStateListeners, listener);
     }
 
     // ========================================================================
@@ -715,10 +744,8 @@ public class RTCPeerConnection implements AutoCloseable {
     }
 
     private void fireIceCandidate(IceCandidate c) {
-        Consumer<RTCIceCandidate> handler = onIceCandidate;
-        if (handler != null) {
-            handler.accept(new RTCIceCandidate(c.toSdpAttribute(), "0", 0));
-        }
+        emitEvent(new RTCIceCandidate(c.toSdpAttribute(), "0", 0),
+            iceCandidateListeners, "ICE candidate");
     }
 
     // ========================================================================
@@ -770,10 +797,7 @@ public class RTCPeerConnection implements AutoCloseable {
         IceConnectionState old = iceConnectionState;
         iceConnectionState = newState;
         if (old != newState) {
-            Consumer<IceConnectionState> handler = onIceConnectionStateChange;
-            if (handler != null) {
-                handler.accept(newState);
-            }
+            emitEvent(newState, iceConnectionStateListeners, "ICE state");
         }
     }
 
@@ -781,10 +805,7 @@ public class RTCPeerConnection implements AutoCloseable {
         ConnectionState old = connectionState;
         connectionState = newState;
         if (old != newState) {
-            Consumer<ConnectionState> handler = onConnectionStateChange;
-            if (handler != null) {
-                handler.accept(newState);
-            }
+            emitEvent(newState, connectionStateListeners, "connection state");
         }
     }
 
@@ -963,10 +984,7 @@ public class RTCPeerConnection implements AutoCloseable {
     }
 
     private void fireOnTrack(RTCRtpReceiver receiver) {
-        Consumer<RTCRtpReceiver> handler = ontrack;
-        if (handler != null) {
-            handler.accept(receiver);
-        }
+        emitEvent(receiver, trackListeners, "track");
     }
 
     // ========================================================================
@@ -1033,8 +1051,7 @@ public class RTCPeerConnection implements AutoCloseable {
         if (dc == null) return;
         dc.setTransport(sctpTransport);
         dataChannels.add(dc);
-        Consumer<DataChannel> handler = onDataChannel;
-        if (handler != null) handler.accept(dc);
+        emitEvent(dc, dataChannelListeners, "data-channel");
         try {
             dc.handleOpenMessage(new byte[0]);
         } catch (IOException e) {
@@ -1138,15 +1155,31 @@ public class RTCPeerConnection implements AutoCloseable {
     }
 
     private void dispatchInboundRtcpPacket(RtcpPacket packet) {
-        Consumer<RtcpPacket> rtcpPacketHandler = onRtcpPacket;
-        if (rtcpPacketHandler != null) {
+        emitEvent(packet, rtcpPacketListeners, "RTCP packet");
+        dispatchRtcpFeedback(packet);
+    }
+
+    private <T> ListenerSubscription addListener(CopyOnWriteArrayList<Consumer<T>> listeners,
+                                                 Consumer<T> listener) {
+        if (listener == null) {
+            return NOOP_SUBSCRIPTION;
+        }
+        listeners.add(listener);
+        return () -> listeners.remove(listener);
+    }
+
+    private <T> void emitEvent(T event, CopyOnWriteArrayList<Consumer<T>> listeners,
+                               String eventName) {
+        for (Consumer<T> listener : listeners) {
+            if (listener == null) {
+                continue;
+            }
             try {
-                rtcpPacketHandler.accept(packet);
+                listener.accept(event);
             } catch (RuntimeException e) {
-                LOG.warn("RTCP packet callback failed: {}", e.getMessage(), e);
+                LOG.warn("{} listener failed: {}", eventName, e.getMessage(), e);
             }
         }
-        dispatchRtcpFeedback(packet);
     }
 
     private SrtpCryptoContext resolveInboundSrtcpContext() {

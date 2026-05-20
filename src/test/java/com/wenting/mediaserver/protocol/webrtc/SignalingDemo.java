@@ -115,8 +115,8 @@ public class SignalingDemo {
             // -- ICE candidate 收集 --
             List<RTCIceCandidate> pc1Cands = new ArrayList<>();
             List<RTCIceCandidate> pc2Cands = new ArrayList<>();
-            pc1.onIceCandidate = c -> pc1Cands.add(c);
-            pc2.onIceCandidate = c -> pc2Cands.add(c);
+            pc1.addIceCandidateListener(c -> pc1Cands.add(c));
+            pc2.addIceCandidateListener(c -> pc2Cands.add(c));
 
             // -- DataChannel --
             final DataChannel dc = pc1.createDataChannel("chat");
@@ -124,28 +124,28 @@ public class SignalingDemo {
             dc.setStateHandler(s -> {
                 if (s == DataChannel.State.OPEN) dcReady.countDown();
             });
-            pc2.onDataChannel = remoteDc -> {
+            pc2.addDataChannelListener(remoteDc -> {
                 remoteDc.setMessageHandler((data, isBinary) -> {
                     rcvdMsg.set(new String(data, StandardCharsets.UTF_8));
                     msgReceived.countDown();
                 });
-            };
+            });
 
             // -- Media --
             pc1.addTrack(new MediaStreamTrack(MediaStreamTrack.Kind.AUDIO, "audio1"));
             pc1.addTrack(new MediaStreamTrack(MediaStreamTrack.Kind.VIDEO, "video1"));
-            pc2.ontrack = receiver -> {
+            pc2.addTrackListener(receiver -> {
                 LOG.info("PC2 ontrack: " + receiver.getTrack().getKind());
                 if (receiver.getTrack().getKind() == MediaStreamTrack.Kind.AUDIO)
                     audioTrackSeen.countDown();
                 if (receiver.getTrack().getKind() == MediaStreamTrack.Kind.VIDEO)
                     videoTrackSeen.countDown();
-            };
+            });
 
             // -- 连接状态 --
-            pc2.onConnectionStateChange = s -> {
+            pc2.addConnectionStateListener(s -> {
                 if (s == RTCPeerConnection.ConnectionState.CONNECTED) connectedLatch.countDown();
-            };
+            });
 
             // ================================================================
             // Step 1: PC1 → Offer (信令)

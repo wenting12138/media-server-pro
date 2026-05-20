@@ -9,6 +9,7 @@ import com.wenting.mediaserver.core.registry.StreamRegistry;
 import com.wenting.mediaserver.protocol.http.HttpRouterHandler;
 import com.wenting.mediaserver.protocol.webrtc.WebRtcPlaybackPeerSession;
 import com.wenting.mediaserver.protocol.webrtc.WebRtcPlaybackSessionManager;
+import com.wenting.mediaserver.protocol.webrtc.api.RTCPeerConnection;
 import com.wenting.mediaserver.protocol.webrtc.transport.DatagramIoSender;
 import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.handler.codec.http.DefaultFullHttpRequest;
@@ -19,6 +20,7 @@ import io.netty.util.CharsetUtil;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
+import java.lang.reflect.Method;
 import java.util.concurrent.CompletableFuture;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -68,7 +70,7 @@ class WebRtcPlayHandlerTest {
         assertTrue(answerSdp.contains("a=rtpmap:96 H264/90000"));
         assertTrue(answerSdp.contains("192.168.3.52 18081"));
         assertEquals(1, sessionManager.count());
-        assertEquals(1, publishedStream.subscriberCount());
+        assertEquals(0, publishedStream.subscriberCount());
         response.release();
         channel.finishAndReleaseAll();
         sessionManager.close();
@@ -148,6 +150,37 @@ class WebRtcPlayHandlerTest {
         JsonNode root = objectMapper.readTree(response.content().toString(CharsetUtil.UTF_8));
         assertEquals(0, root.get("code").asInt());
         assertEquals(1, sessionManager.count());
+        assertEquals(0, publishedStream.subscriberCount());
+        response.release();
+        channel.finishAndReleaseAll();
+        sessionManager.close();
+    }
+
+    @Test
+    void shouldActivateSubscriberOnlyAfterPeerConnectionConnected() throws Exception {
+        StreamRegistry registry = new StreamRegistry();
+        StreamKey streamKey = new StreamKey(StreamProtocol.RTMP, "live", "cam01");
+        DefaultPublishedStream publishedStream = new DefaultPublishedStream(streamKey);
+        registry.registerPublishedStream(streamKey, publishedStream);
+        WebRtcPlaybackSessionManager sessionManager = new WebRtcPlaybackSessionManager();
+        EmbeddedChannel channel = new EmbeddedChannel(
+                new HttpRouterHandler(new WebRtcPlayHandler(
+                        registry,
+                        sessionManager,
+                        new InetSocketAddress("192.168.3.52", 18081),
+                        new NoopDatagramIoSender()
+                ))
+        );
+
+        channel.writeInbound(request("{\"app\":\"live\",\"stream\":\"cam01\",\"sdp\":\"" + escapeJson(offerWithH264()) + "\"}"));
+
+        FullHttpResponse response = channel.readOutbound();
+        assertEquals(200, response.status().code());
+        WebRtcPlaybackPeerSession session = sessionManager.sessions().iterator().next();
+        assertEquals(0, publishedStream.subscriberCount());
+
+        emitConnectionState(session.peerConnection(), RTCPeerConnection.ConnectionState.CONNECTED);
+
         assertEquals(1, publishedStream.subscriberCount());
         response.release();
         channel.finishAndReleaseAll();
@@ -175,7 +208,7 @@ class WebRtcPlayHandlerTest {
         FullHttpResponse response = channel.readOutbound();
         assertEquals(200, response.status().code());
         assertEquals(1, sessionManager.count());
-        assertEquals(1, publishedStream.subscriberCount());
+        assertEquals(0, publishedStream.subscriberCount());
 
         WebRtcPlaybackPeerSession session = sessionManager.sessions().iterator().next();
         session.peerConnection().close();
@@ -270,6 +303,14 @@ class WebRtcPlayHandlerTest {
 
     private static String escapeJson(String value) {
         return value.replace("\\", "\\\\").replace("\"", "\\\"").replace("\r", "\\r").replace("\n", "\\n");
+    }
+
+    private static void emitConnectionState(RTCPeerConnection peerConnection,
+                                            RTCPeerConnection.ConnectionState state) throws Exception {
+        Method method = RTCPeerConnection.class.getDeclaredMethod("setConnectionState",
+                RTCPeerConnection.ConnectionState.class);
+        method.setAccessible(true);
+        method.invoke(peerConnection, state);
     }
 
     private static final class NoopDatagramIoSender implements DatagramIoSender {

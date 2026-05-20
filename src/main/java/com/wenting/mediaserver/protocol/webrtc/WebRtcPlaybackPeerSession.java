@@ -11,6 +11,7 @@ import com.wenting.mediaserver.core.publish.IPublishedStream;
 import com.wenting.mediaserver.core.publish.InboundMediaFrame;
 import com.wenting.mediaserver.core.publish.InboundRtpPacket;
 import com.wenting.mediaserver.core.publish.MediaSubscriberAdapter;
+import com.wenting.mediaserver.core.publish.video.H264RtpKeyFrameDetector;
 import com.wenting.mediaserver.core.remux.rtp.RtpPacketChunk;
 import com.wenting.mediaserver.core.remux.rtp.RtpSendTrackState;
 import com.wenting.mediaserver.core.remux.rtp.RtspFrameToRtpPacketizer;
@@ -37,6 +38,7 @@ import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
 
 /**
  * Service-layer wrapper around the generic WebRTC peer connection API.
@@ -55,6 +57,7 @@ public final class WebRtcPlaybackPeerSession implements AutoCloseable {
     private final MediaSubscriberAdapter subscriberAdapter;
     private final RtspFrameToRtpPacketizer frameToRtpPacketizer = new RtspFrameToRtpPacketizer();
     private final RtpPacketParser rtpPacketParser = new RtpPacketParser();
+    private final H264RtpKeyFrameDetector h264RtpKeyFrameDetector = new H264RtpKeyFrameDetector();
     private final Map<String, InboundMediaFrame> latestConfigFramesByTrackId = new ConcurrentHashMap<String, InboundMediaFrame>();
     private final Map<String, RtpSendTrackState> rtpSendStatesByTrackId = new ConcurrentHashMap<String, RtpSendTrackState>();
     private final Map<String, Boolean> startedTracksByTrackId = new ConcurrentHashMap<String, Boolean>();
@@ -74,9 +77,13 @@ public final class WebRtcPlaybackPeerSession implements AutoCloseable {
     private final AtomicLong nackCount = new AtomicLong(0);
     private final AtomicLong nackResendHitCount = new AtomicLong(0);
     private final AtomicLong nackResendMissCount = new AtomicLong(0);
+    private final AtomicBoolean lifecycleCleanupInstalled = new AtomicBoolean(false);
+    private final AtomicBoolean playbackActivated = new AtomicBoolean(false);
     private final AtomicBoolean closed = new AtomicBoolean(false);
     private volatile IPublishedStream publishedStream;
     private volatile InetSocketAddress remoteAddress;
+    private volatile RTCPeerConnection.ListenerSubscription connectionStateSubscription;
+    private volatile RTCPeerConnection.ListenerSubscription iceStateSubscription;
 
     private static final int MAX_NACK_RESEND_PACKETS = 64;
     private static final int SENT_PACKET_CACHE_CAPACITY = 4096;
@@ -116,12 +123,49 @@ public final class WebRtcPlaybackPeerSession implements AutoCloseable {
         return subscriberAdapter;
     }
 
-    public void attachPublishedStream(IPublishedStream stream) {
+    public synchronized void attachPublishedStream(IPublishedStream stream) {
+        this.publishedStream = stream;
+        if (stream == null || !playbackActivated.get()) {
+            return;
+        }
+        stream.addSubscriber(subscriberAdapter);
+        requestInitialVideoKeyFrame(stream);
+    }
+
+    public synchronized void activatePlayback() {
+        if (closed.get() || !playbackActivated.compareAndSet(false, true)) {
+            return;
+        }
+        IPublishedStream stream = publishedStream;
         if (stream == null) {
             return;
         }
-        this.publishedStream = stream;
         stream.addSubscriber(subscriberAdapter);
+        requestInitialVideoKeyFrame(stream);
+    }
+
+    public void installLifecycleCleanup(Runnable cleanupAction) {
+        if (cleanupAction == null || !lifecycleCleanupInstalled.compareAndSet(false, true)) {
+            return;
+        }
+        connectionStateSubscription = peerConnection.addConnectionStateListener(state -> {
+            if (state == RTCPeerConnection.ConnectionState.CONNECTED) {
+                activatePlayback();
+            }
+            if (state == RTCPeerConnection.ConnectionState.FAILED
+                    || state == RTCPeerConnection.ConnectionState.CLOSED) {
+                runCleanupAction(cleanupAction);
+            }
+        });
+        iceStateSubscription = peerConnection.addIceConnectionStateListener(state -> {
+            if (state == RTCPeerConnection.IceConnectionState.FAILED
+                    || state == RTCPeerConnection.IceConnectionState.CLOSED) {
+                runCleanupAction(cleanupAction);
+            }
+        });
+        if (peerConnection.getConnectionState() == RTCPeerConnection.ConnectionState.CONNECTED) {
+            activatePlayback();
+        }
     }
 
     public boolean acceptsTrack(String trackId) {
@@ -136,6 +180,9 @@ public final class WebRtcPlaybackPeerSession implements AutoCloseable {
         if (canRelaySourceRtpPacket(packet)) {
             if (!isSendReady(packet.frame())) {
                 queuePendingSourcePacket(packet);
+                return;
+            }
+            if (!canRelaySourcePacketNow(packet)) {
                 return;
             }
             relaySourceRtpPacket(packet);
@@ -436,11 +483,40 @@ public final class WebRtcPlaybackPeerSession implements AutoCloseable {
             }
             pendingSourcePacketsByTrackId.remove(trackId);
             for (InboundRtpPacket pendingPacket : pendingPackets) {
-                if (pendingPacket != null && canRelaySourceRtpPacket(pendingPacket)) {
+                if (pendingPacket != null
+                        && canRelaySourceRtpPacket(pendingPacket)
+                        && canRelaySourcePacketNow(pendingPacket)) {
                     relaySourceRtpPacket(pendingPacket);
                 }
             }
         }
+    }
+
+    private boolean canRelaySourcePacketNow(InboundRtpPacket packet) {
+        InboundMediaFrame frame = packet == null ? null : packet.frame();
+        if (frame == null) {
+            return false;
+        }
+        String trackId = WebrtcPlayUtil.normalizeTrackId(frame.trackId());
+        if (isStarted(trackId)) {
+            return true;
+        }
+        RtpParseResult parseResult = rtpPacketParser.parse(frame.payload());
+        RtpPacketHeader header = parseResult == null ? null : parseResult.rtpHeader();
+        if (header == null) {
+            logDropOnce(trackId, "invalid-source-startup",
+                    "WebRTC direct RTP relay waiting valid startup packet session={} stream={} track={}",
+                    sessionId, streamKey, trackId);
+            return false;
+        }
+        if (!h264RtpKeyFrameDetector.isKeyFrame(frame.payload(), header)) {
+            logDropOnce(trackId, "wait-source-keyframe",
+                    "WebRTC direct RTP relay waiting startup keyframe session={} stream={} track={}",
+                    sessionId, streamKey, trackId);
+            return false;
+        }
+        startedTracksByTrackId.put(trackId, Boolean.TRUE);
+        return true;
     }
 
     private void logFirstSrtpPacket(InboundMediaFrame frame, int payloadType, int clockRate, InetSocketAddress target, int bytes, boolean marker) {
@@ -680,17 +756,52 @@ public final class WebRtcPlaybackPeerSession implements AutoCloseable {
         return Boolean.TRUE.equals(startedTracksByTrackId.get(WebrtcPlayUtil.normalizeTrackId(trackId)));
     }
 
+    private void requestInitialVideoKeyFrame(IPublishedStream stream) {
+        if (stream == null) {
+            return;
+        }
+        String trackId = stream.firstVideoTrackId();
+        if (trackId == null || trackId.trim().isEmpty()) {
+            return;
+        }
+        boolean accepted = stream.requestKeyFrame(trackId);
+        log.debug("Requested initial WebRTC playback keyframe session={} stream={} track={} accepted={}",
+                sessionId, streamKey, trackId, accepted);
+    }
+
+    private void runCleanupAction(Runnable cleanupAction) {
+        try {
+            cleanupAction.run();
+        } catch (RuntimeException e) {
+            log.warn("WebRTC playback cleanup callback failed session={} stream={}: {}",
+                    sessionId, streamKey, e.getMessage(), e);
+        }
+    }
 
     @Override
     public void close() {
         if (!closed.compareAndSet(false, true)) {
             return;
         }
+        closeSubscription(connectionStateSubscription);
+        closeSubscription(iceStateSubscription);
         IPublishedStream stream = publishedStream;
         if (stream != null) {
             stream.removeSubscriber(sessionId);
         }
         peerConnection.close();
         datagramIo.close();
+    }
+
+    private void closeSubscription(RTCPeerConnection.ListenerSubscription subscription) {
+        if (subscription == null) {
+            return;
+        }
+        try {
+            subscription.close();
+        } catch (RuntimeException e) {
+            log.debug("Ignoring playback listener close failure session={} stream={}: {}",
+                    sessionId, streamKey, e.getMessage(), e);
+        }
     }
 }
