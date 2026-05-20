@@ -817,7 +817,7 @@ public class RTCPeerConnection implements AutoCloseable {
 
                 // 带超时的 DTLS 握手
                 DtlsHandshake handshake = DtlsHandshake.handshakeWithTimeout(
-                    dtlsTransport, isDtlsServer, certCredentials,
+                    dtlsTransport, isDtlsServer, certCredentials, remoteFingerprint,
                     DTLS_HANDSHAKE_TIMEOUT_MS);
                 this.dtlsHandshake = handshake;
 

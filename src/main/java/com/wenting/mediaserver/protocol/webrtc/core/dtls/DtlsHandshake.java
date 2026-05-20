@@ -18,6 +18,8 @@ import java.security.PrivateKey;
 import java.security.SecureRandom;
 import java.security.Security;
 import java.util.Hashtable;
+import java.util.Locale;
+import java.util.Vector;
 import java.util.concurrent.*;
 
 /**
@@ -43,11 +45,17 @@ public class DtlsHandshake {
     private byte[] srtpKeyMaterial;
 
     public DtlsHandshake(UdpDatagramTransport transport, boolean isServer) throws IOException {
-        this(transport, isServer, null);
+        this(transport, isServer, null, null);
     }
 
     public DtlsHandshake(UdpDatagramTransport transport, boolean isServer,
                          CertCredentials certCredentials) throws IOException {
+        this(transport, isServer, certCredentials, null);
+    }
+
+    public DtlsHandshake(UdpDatagramTransport transport, boolean isServer,
+                         CertCredentials certCredentials,
+                         String expectedRemoteFingerprint) throws IOException {
         installBouncyCastleProvider();
 
         TlsCrypto crypto;
@@ -63,18 +71,20 @@ public class DtlsHandshake {
 
         LOG.debug("DTLS handshake begin role={}", isServer ? "server" : "client");
 
+        CertCredentials credentials = certCredentials != null
+            ? certCredentials
+            : safeGenerateCredentials(crypto);
+
         if (isServer) {
-            CertCredentials credentials = certCredentials != null
-                ? certCredentials
-                : safeGenerateCredentials(crypto);
             MyTlsServer server = new MyTlsServer((JcaTlsCrypto) crypto,
-                credentials.privateKey, credentials.certificate);
+                credentials.privateKey, credentials.certificate, expectedRemoteFingerprint);
             DTLSServerProtocol protocol = new DTLSServerProtocol();
             this.dtlsTransport = protocol.accept(server, transport);
             this.srtpKeyMaterial = server.getSrtpKeyMaterial();
             LOG.debug("DTLS handshake finished role=server");
         } else {
-            MyTlsClient client = new MyTlsClient(crypto, srtpData);
+            MyTlsClient client = new MyTlsClient(crypto, srtpData, credentials,
+                expectedRemoteFingerprint);
             DTLSClientProtocol protocol = new DTLSClientProtocol();
             this.dtlsTransport = protocol.connect(client, transport);
             this.srtpKeyMaterial = client.getSrtpKeyMaterial();
@@ -93,6 +103,7 @@ public class DtlsHandshake {
     public static DtlsHandshake handshakeWithTimeout(UdpDatagramTransport transport,
                                                      boolean isServer,
                                                      CertCredentials certCredentials,
+                                                     String expectedRemoteFingerprint,
                                                      long timeoutMs) throws IOException {
         ExecutorService executor = Executors.newSingleThreadExecutor(r -> {
             Thread t = new Thread(r, "dtls-handshake-timeout");
@@ -102,7 +113,7 @@ public class DtlsHandshake {
 
         try {
             Future<DtlsHandshake> future = executor.submit(
-                () -> new DtlsHandshake(transport, isServer, certCredentials));
+                () -> new DtlsHandshake(transport, isServer, certCredentials, expectedRemoteFingerprint));
 
             try {
                 return future.get(timeoutMs, TimeUnit.MILLISECONDS);
@@ -185,6 +196,23 @@ public class DtlsHandshake {
 
     public static String computeFingerprint(CertCredentials creds) throws Exception {
         byte[] der = creds.certificate.getCertificateAt(0).getEncoded();
+        return formatFingerprint(der);
+    }
+
+    public static String computeFingerprint(org.bouncycastle.tls.Certificate certificate)
+            throws IOException {
+        if (certificate == null || certificate.isEmpty()) {
+            throw new IOException("Peer DTLS certificate chain is empty");
+        }
+        try {
+            byte[] der = certificate.getCertificateAt(0).getEncoded();
+            return formatFingerprint(der);
+        } catch (Exception e) {
+            throw new IOException("Failed to compute peer DTLS fingerprint", e);
+        }
+    }
+
+    private static String formatFingerprint(byte[] der) throws Exception {
         MessageDigest md = MessageDigest.getInstance("SHA-256");
         byte[] hash = md.digest(der);
         StringBuilder sb = new StringBuilder(hash.length * 3 - 1);
@@ -197,14 +225,51 @@ public class DtlsHandshake {
         return sb.toString();
     }
 
+    private static void validatePeerFingerprint(org.bouncycastle.tls.Certificate certificate,
+                                                String expectedRemoteFingerprint,
+                                                String peerRole) throws IOException {
+        String normalizedExpected = normalizeFingerprint(expectedRemoteFingerprint);
+        if (normalizedExpected == null) {
+            throw new IOException("Missing expected DTLS fingerprint for " + peerRole);
+        }
+        String actualFingerprint = computeFingerprint(certificate);
+        String normalizedActual = normalizeFingerprint(actualFingerprint);
+        if (!normalizedExpected.equals(normalizedActual)) {
+            LOG.error("DTLS fingerprint mismatch for {}: expected={}, actual={}", peerRole, normalizedExpected, normalizedActual);
+            throw new TlsFatalAlert(AlertDescription.bad_certificate,
+                "DTLS fingerprint mismatch for " + peerRole
+                    + ": expected=" + expectedRemoteFingerprint
+                    + " actual=" + actualFingerprint);
+        }
+    }
+
+    private static String normalizeFingerprint(String fingerprint) {
+        if (fingerprint == null) {
+            return null;
+        }
+        String normalized = fingerprint.replace(":", "")
+            .replace(" ", "")
+            .trim()
+            .toUpperCase(Locale.ROOT);
+        return normalized.isEmpty() ? null : normalized;
+    }
+
     private static class MyTlsClient extends DefaultTlsClient {
         private final UseSRTPData srtpData;
+        private final TlsCrypto crypto;
+        private final CertCredentials certCredentials;
+        private final String expectedRemoteFingerprint;
         private TlsContext tlsContext;
         private volatile byte[] srtpKeyMaterial;
 
-        MyTlsClient(TlsCrypto crypto, UseSRTPData srtpData) {
+        MyTlsClient(TlsCrypto crypto, UseSRTPData srtpData,
+                    CertCredentials certCredentials,
+                    String expectedRemoteFingerprint) {
             super(crypto);
+            this.crypto = crypto;
             this.srtpData = srtpData;
+            this.certCredentials = certCredentials;
+            this.expectedRemoteFingerprint = expectedRemoteFingerprint;
         }
 
         @Override
@@ -232,10 +297,20 @@ public class DtlsHandshake {
 
         @Override
         public TlsAuthentication getAuthentication() {
-            return new ServerOnlyTlsAuthentication() {
+            return new TlsAuthentication() {
                 @Override
-                public void notifyServerCertificate(TlsServerCertificate serverCert) {
-                    // Fingerprint validation is handled by signaling.
+                public void notifyServerCertificate(TlsServerCertificate serverCert) throws IOException {
+                    validatePeerFingerprint(serverCert.getCertificate(),
+                        expectedRemoteFingerprint, "server");
+                }
+
+                @Override
+                public TlsCredentials getClientCredentials(CertificateRequest certificateRequest)
+                        throws IOException {
+                    if (certCredentials == null || tlsContext == null) {
+                        return null;
+                    }
+                    return certCredentials.createSigner(crypto, tlsContext);
                 }
             };
         }
@@ -259,15 +334,18 @@ public class DtlsHandshake {
         private final JcaTlsCrypto crypto;
         private final PrivateKey privateKey;
         private final org.bouncycastle.tls.Certificate certificate;
+        private final String expectedRemoteFingerprint;
         private boolean clientOfferedSrtpProfile;
         private volatile byte[] srtpKeyMaterial;
 
         MyTlsServer(JcaTlsCrypto crypto, PrivateKey privateKey,
-                    org.bouncycastle.tls.Certificate certificate) {
+                    org.bouncycastle.tls.Certificate certificate,
+                    String expectedRemoteFingerprint) {
             super(crypto);
             this.crypto = crypto;
             this.privateKey = privateKey;
             this.certificate = certificate;
+            this.expectedRemoteFingerprint = expectedRemoteFingerprint;
         }
 
         @Override
@@ -310,6 +388,19 @@ public class DtlsHandshake {
         }
 
         @Override
+        public CertificateRequest getCertificateRequest() {
+            Vector supportedSignatureAlgorithms = new Vector();
+            supportedSignatureAlgorithms.add(new SignatureAndHashAlgorithm(
+                HashAlgorithm.sha256, SignatureAlgorithm.rsa));
+            supportedSignatureAlgorithms.add(new SignatureAndHashAlgorithm(
+                HashAlgorithm.sha256, SignatureAlgorithm.ecdsa));
+            return new CertificateRequest(
+                new short[]{ClientCertificateType.rsa_sign, ClientCertificateType.ecdsa_sign},
+                supportedSignatureAlgorithms,
+                new Vector());
+        }
+
+        @Override
         protected TlsCredentialedSigner getRSASignerCredentials() {
             SignatureAndHashAlgorithm sigAlg = new SignatureAndHashAlgorithm(
                 HashAlgorithm.sha256, SignatureAlgorithm.rsa);
@@ -319,6 +410,12 @@ public class DtlsHandshake {
                 privateKey,
                 certificate,
                 sigAlg);
+        }
+
+        @Override
+        public void notifyClientCertificate(org.bouncycastle.tls.Certificate clientCertificate)
+                throws IOException {
+            validatePeerFingerprint(clientCertificate, expectedRemoteFingerprint, "client");
         }
 
         @Override
