@@ -46,7 +46,7 @@ import java.util.function.Consumer;
  * Keeps HTTP signaling and published-stream subscription state outside the
  * browser-style RTCPeerConnection object.
  */
-public final class WebRtcPlaybackPeerSession implements AutoCloseable {
+public final class WebRtcPlaybackPeerSession implements WebRtcManagedSession {
 
     private static final Logger log = LoggerFactory.getLogger(WebRtcPlaybackPeerSession.class);
 

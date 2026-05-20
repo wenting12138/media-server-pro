@@ -21,6 +21,7 @@ final class HlsSession implements MediaSubscriberAdapter {
     private final HlsStorage storage;
     private final int playlistSize;
     private final long targetDurationMillis;
+    private boolean derivedAudioAttached;
     private long nextSequence = 0L;
     private Long currentSegmentStartDtsMillis;
 
@@ -78,6 +79,14 @@ final class HlsSession implements MediaSubscriberAdapter {
 
     synchronized byte[] segmentBytes(long sequence) {
         return storage.segmentBytes(sequence);
+    }
+
+    synchronized boolean derivedAudioAttached() {
+        return derivedAudioAttached;
+    }
+
+    synchronized void markDerivedAudioAttached() {
+        derivedAudioAttached = true;
     }
 
     synchronized void close() {

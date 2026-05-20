@@ -6,6 +6,7 @@ import com.wenting.mediaserver.core.model.StreamKey;
 import com.wenting.mediaserver.core.publish.IPublishedStream;
 import com.wenting.mediaserver.core.registry.StreamRegistry;
 import com.wenting.mediaserver.protocol.http.HttpRequestHandler;
+import com.wenting.mediaserver.protocol.http.utils.HttpUtil;
 import com.wenting.mediaserver.protocol.webrtc.WebRtcPlaybackPeerSession;
 import com.wenting.mediaserver.protocol.webrtc.WebRtcPlaybackSessionManager;
 import com.wenting.mediaserver.protocol.webrtc.api.MediaStreamTrack;
@@ -14,18 +15,11 @@ import com.wenting.mediaserver.protocol.webrtc.api.RTCRtpTransceiver;
 import com.wenting.mediaserver.protocol.webrtc.api.RTCSessionDescription;
 import com.wenting.mediaserver.protocol.webrtc.transport.DatagramIoSender;
 import com.wenting.mediaserver.protocol.webrtc.transport.SessionDatagramIo;
-import io.netty.buffer.Unpooled;
-import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
-import io.netty.handler.codec.http.DefaultFullHttpResponse;
 import io.netty.handler.codec.http.FullHttpRequest;
-import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpResponseStatus;
-import io.netty.handler.codec.http.HttpVersion;
 import io.netty.util.CharsetUtil;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.net.InetSocketAddress;
 import java.util.UUID;
@@ -33,9 +27,7 @@ import java.util.UUID;
 /**
  * Minimal server-side WebRTC play signaling endpoint.
  */
-public final class WebRtcPlayHandler implements HttpRequestHandler {
-
-    private static final Logger log = LoggerFactory.getLogger(WebRtcPlayHandler.class);
+public final class WebRtcPlayHandler extends AbstractWebRtcSessionHandler<WebRtcPlaybackPeerSession> {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final String PLAY_PATH = "/webrtc/play";
@@ -61,28 +53,29 @@ public final class WebRtcPlayHandler implements HttpRequestHandler {
     public boolean matches(FullHttpRequest request) {
         return request != null
                 && HttpMethod.POST.equals(request.method())
-                && PLAY_PATH.equals(extractPath(request.uri()));
+                && PLAY_PATH.equals(HttpUtil.extractPath(request.uri()));
     }
 
     @Override
     public void handleRequest(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {
         JsonNode root = OBJECT_MAPPER.readTree(request.content().toString(CharsetUtil.UTF_8));
-        String app = text(root, "app");
-        String streamName = text(root, "stream");
-        String offerSdp = text(root, "sdp");
-        if (isBlank(app) || isBlank(streamName) || isBlank(offerSdp)) {
-            writeJson(ctx, HttpResponseStatus.BAD_REQUEST, "{\"code\":-1,\"msg\":\"missing app/stream/sdp\"}");
+        String app = HttpUtil.text(root, "app");
+        String streamName = HttpUtil.text(root, "stream");
+        String offerSdp = HttpUtil.text(root, "sdp");
+        if (HttpUtil.isBlank(app) || HttpUtil.isBlank(streamName) || HttpUtil.isBlank(offerSdp)) {
+            HttpUtil.writeJson(ctx, HttpResponseStatus.BAD_REQUEST, "{\"code\":-1,\"msg\":\"missing app/stream/sdp\"}");
             return;
         }
         IPublishedStream stream = registry.findPublishedStreamForWebRtcPlayback(app, streamName);
         if (stream == null) {
-            writeJson(ctx, HttpResponseStatus.NOT_FOUND, "{\"code\":-1,\"msg\":\"stream not found\"}");
+            HttpUtil.writeJson(ctx, HttpResponseStatus.NOT_FOUND, "{\"code\":-1,\"msg\":\"stream not found\"}");
             return;
         }
 
         SessionDatagramIo datagramIo = new SessionDatagramIo(localUdpAddress, datagramSender);
         RTCPeerConnection peerConnection = new RTCPeerConnection(datagramIo);
         WebRtcPlaybackPeerSession session = null;
+        boolean success = false;
         try {
             RTCSessionDescription offer = new RTCSessionDescription("offer", offerSdp);
             peerConnection.setRemoteDescription(offer);
@@ -103,47 +96,20 @@ public final class WebRtcPlayHandler implements HttpRequestHandler {
                     "success",
                     new PlayResponseData(session.sessionId(), answer.getType(), answer.getSdp())
             ));
-            writeJson(ctx, HttpResponseStatus.OK, body);
+            HttpUtil.writeJson(ctx, HttpResponseStatus.OK, body);
             WebRtcPlaybackPeerSession managedSession = session;
             managedSession.installLifecycleCleanup(() -> closeManagedSession(managedSession));
             session.attachPublishedStream(stream);
             sessionManager.register(session);
+            success = true;
         } finally {
-            if (session != null) {
-                closeManagedSession(session);
-            } else {
-                peerConnection.close();
-                datagramIo.close();
-            }
+            cleanupFailedRequest(success, session, peerConnection, datagramIo, null);
         }
     }
 
-    private void closeManagedSession(WebRtcPlaybackPeerSession session) {
-        WebRtcPlaybackPeerSession removed = sessionManager.removeAndClose(session.sessionId());
-        if (removed == null) {
-            session.close();
-        }
-    }
-
-    private static void writeJson(ChannelHandlerContext ctx, HttpResponseStatus status, String body) {
-        byte[] content = body.getBytes(CharsetUtil.UTF_8);
-        DefaultFullHttpResponse response = new DefaultFullHttpResponse(
-                HttpVersion.HTTP_1_1,
-                status,
-                Unpooled.wrappedBuffer(content)
-        );
-        response.headers().set(HttpHeaderNames.CONTENT_TYPE, "application/json; charset=UTF-8");
-        response.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, content.length);
-        ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE);
-    }
-
-    private static String text(JsonNode node, String field) {
-        JsonNode child = node == null ? null : node.get(field);
-        return child == null || child.isNull() ? null : child.asText();
-    }
-
-    private static boolean isBlank(String value) {
-        return value == null || value.trim().isEmpty();
+    @Override
+    protected WebRtcPlaybackPeerSession removeAndCloseManagedSession(String sessionId) {
+        return sessionManager.removeAndClose(sessionId);
     }
 
     private static void configureOutgoingTracks(RTCPeerConnection peerConnection, String streamName) {
@@ -174,14 +140,6 @@ public final class WebRtcPlayHandler implements HttpRequestHandler {
             return "stream";
         }
         return value.trim().replaceAll("[^A-Za-z0-9_-]", "_");
-    }
-
-    private static String extractPath(String uri) {
-        if (uri == null) {
-            return "";
-        }
-        int queryIndex = uri.indexOf('?');
-        return queryIndex >= 0 ? uri.substring(0, queryIndex) : uri;
     }
 
     private static final class PlayResponse {

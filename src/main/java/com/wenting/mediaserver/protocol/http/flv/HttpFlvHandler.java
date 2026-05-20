@@ -5,16 +5,14 @@ import com.wenting.mediaserver.core.publish.IPublishedStream;
 import com.wenting.mediaserver.core.registry.StreamRegistry;
 import com.wenting.mediaserver.core.track.ITrack;
 import com.wenting.mediaserver.protocol.http.HttpRequestHandler;
+import com.wenting.mediaserver.protocol.http.utils.HttpUtil;
 import com.wenting.mediaserver.protocol.rtsp.RtspSession;
 import com.wenting.mediaserver.protocol.rtsp.RtspSessionManager;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
-import io.netty.handler.codec.http.DefaultFullHttpResponse;
 import io.netty.handler.codec.http.FullHttpRequest;
-import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpResponseStatus;
-import io.netty.handler.codec.http.HttpVersion;
 import io.netty.util.CharsetUtil;
 
 public final class HttpFlvHandler extends SimpleChannelInboundHandler<FullHttpRequest> implements HttpRequestHandler {
@@ -100,11 +98,7 @@ public final class HttpFlvHandler extends SimpleChannelInboundHandler<FullHttpRe
         if (uri == null || uri.trim().isEmpty()) {
             return null;
         }
-        String path = uri;
-        int queryIndex = path.indexOf('?');
-        if (queryIndex >= 0) {
-            path = path.substring(0, queryIndex);
-        }
+        String path = HttpUtil.extractPath(uri);
         if (!path.endsWith(".flv")) {
             return null;
         }
@@ -126,10 +120,7 @@ public final class HttpFlvHandler extends SimpleChannelInboundHandler<FullHttpRe
 
     private void writeError(ChannelHandlerContext ctx, HttpResponseStatus status, String message) {
         byte[] content = message == null ? new byte[0] : message.getBytes(CharsetUtil.UTF_8);
-        DefaultFullHttpResponse response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, status, io.netty.buffer.Unpooled.wrappedBuffer(content));
-        response.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/plain; charset=UTF-8");
-        response.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, content.length);
-        ctx.writeAndFlush(response).addListener(io.netty.channel.ChannelFutureListener.CLOSE);
+        HttpUtil.writeBytes(ctx, status, content, "text/plain; charset=UTF-8", true);
     }
 
 }

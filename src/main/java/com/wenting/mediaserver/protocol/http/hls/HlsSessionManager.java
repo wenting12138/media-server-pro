@@ -40,6 +40,7 @@ public final class HlsSessionManager implements AutoCloseable {
         }
         HlsSession existing = sessionsByStreamKey.get(streamKey);
         if (existing != null) {
+            attachDerivedAudioIfPresent(existing, streamKey, stream);
             return existing;
         }
         HlsSession created = new HlsSession(
@@ -54,13 +55,16 @@ public final class HlsSessionManager implements AutoCloseable {
         HlsSession target = previous == null ? created : previous;
         if (previous == null) {
             stream.addSubscriber(created);
-            attachDerivedAudioIfPresent(created, streamKey, stream);
         }
+        attachDerivedAudioIfPresent(target, streamKey, stream);
         return target;
     }
 
     private void attachDerivedAudioIfPresent(HlsSession session, StreamKey streamKey, IPublishedStream sourceStream) {
         if (session == null || streamKey == null || sourceStream == null || streamRegistry == null) {
+            return;
+        }
+        if (session.derivedAudioAttached()) {
             return;
         }
         if (sourceStream.getProtocol() != StreamProtocol.WEBRTC) {
@@ -72,6 +76,7 @@ public final class HlsSessionManager implements AutoCloseable {
             return;
         }
         derivedAudioStream.addSubscriber(session);
+        session.markDerivedAudioAttached();
     }
 
     private void attachRtspTracksIfPresent(HlsSession session, StreamKey streamKey) {

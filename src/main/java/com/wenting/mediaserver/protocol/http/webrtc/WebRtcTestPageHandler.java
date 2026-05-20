@@ -1,15 +1,13 @@
 package com.wenting.mediaserver.protocol.http.webrtc;
 
 import com.wenting.mediaserver.protocol.http.HttpRequestHandler;
-import io.netty.buffer.Unpooled;
+import com.wenting.mediaserver.protocol.http.utils.HttpUtil;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
-import io.netty.handler.codec.http.DefaultFullHttpResponse;
 import io.netty.handler.codec.http.FullHttpRequest;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpResponseStatus;
-import io.netty.handler.codec.http.HttpVersion;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -26,7 +24,7 @@ public final class WebRtcTestPageHandler extends SimpleChannelInboundHandler<Ful
     protected void channelRead0(ChannelHandlerContext ctx, FullHttpRequest req) throws Exception {
         if (!matches(req)) {
             ctx.fireChannelRead(req.retain());
-            return;
+                return;
         }
         handleRequest(ctx, req);
     }
@@ -35,28 +33,15 @@ public final class WebRtcTestPageHandler extends SimpleChannelInboundHandler<Ful
     public boolean matches(FullHttpRequest request) {
         return request != null
                 && HttpMethod.GET.equals(request.method())
-                && WEBRTC_TEST_PATH.equals(extractPath(request.uri()));
+                && WEBRTC_TEST_PATH.equals(HttpUtil.extractPath(request.uri()));
     }
 
     @Override
     public void handleRequest(ChannelHandlerContext ctx, FullHttpRequest request) {
-        DefaultFullHttpResponse response = new DefaultFullHttpResponse(
-                HttpVersion.HTTP_1_1,
-                HttpResponseStatus.OK,
-                Unpooled.wrappedBuffer(WEBRTC_TEST_PAGE_BYTES)
-        );
-        response.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/html; charset=UTF-8");
-        response.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, WEBRTC_TEST_PAGE_BYTES.length);
-        response.headers().set("Cache-Control", "no-cache");
-        ctx.writeAndFlush(response);
-    }
-
-    private String extractPath(String uri) {
-        if (uri == null) {
-            return "";
-        }
-        int queryIndex = uri.indexOf('?');
-        return queryIndex >= 0 ? uri.substring(0, queryIndex) : uri;
+        HttpUtil.writeBytes(ctx, HttpResponseStatus.OK, WEBRTC_TEST_PAGE_BYTES,
+                "text/html; charset=UTF-8",
+                response -> response.headers().set(HttpHeaderNames.CACHE_CONTROL, "no-cache"),
+                false);
     }
 
     private static byte[] loadPageBytes() {

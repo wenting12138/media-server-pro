@@ -4,16 +4,13 @@ import com.wenting.mediaserver.core.model.StreamKey;
 import com.wenting.mediaserver.core.publish.IPublishedStream;
 import com.wenting.mediaserver.core.registry.StreamRegistry;
 import com.wenting.mediaserver.protocol.http.HttpRequestHandler;
-import io.netty.buffer.Unpooled;
-import io.netty.channel.ChannelFutureListener;
+import com.wenting.mediaserver.protocol.http.utils.HttpUtil;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
-import io.netty.handler.codec.http.DefaultFullHttpResponse;
 import io.netty.handler.codec.http.FullHttpRequest;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpResponseStatus;
-import io.netty.handler.codec.http.HttpVersion;
 import io.netty.util.CharsetUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -57,12 +54,12 @@ public final class HlsHandler extends SimpleChannelInboundHandler<FullHttpReques
         HlsSession session = hlsSessionManager.ensureSession(streamKey, stream);
         if (hlsPath.playlist()) {
             byte[] content = session.playlist().getBytes(CharsetUtil.UTF_8);
-            DefaultFullHttpResponse response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK, Unpooled.wrappedBuffer(content));
-            response.headers().set(HttpHeaderNames.CONTENT_TYPE, "application/vnd.apple.mpegurl");
-            response.headers().set(HttpHeaderNames.CACHE_CONTROL, "no-cache");
-            response.headers().set(HttpHeaderNames.CONTENT_LENGTH, content.length);
-            response.headers().set("Access-Control-Allow-Origin", "*");
-            ctx.writeAndFlush(response);
+            HttpUtil.writeBytes(ctx, HttpResponseStatus.OK, content, "application/vnd.apple.mpegurl",
+                    response -> {
+                        response.headers().set(HttpHeaderNames.CACHE_CONTROL, "no-cache");
+                        response.headers().set("Access-Control-Allow-Origin", "*");
+                    },
+                    false);
             return;
         }
         byte[] content = session.segmentBytes(parseSequence(hlsPath.fileName()));
@@ -70,23 +67,19 @@ public final class HlsHandler extends SimpleChannelInboundHandler<FullHttpReques
             writeError(ctx, HttpResponseStatus.NOT_FOUND, "hls segment not ready");
             return;
         }
-        DefaultFullHttpResponse response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK, Unpooled.wrappedBuffer(content));
-        response.headers().set(HttpHeaderNames.CONTENT_TYPE, "video/mp2t");
-        response.headers().set(HttpHeaderNames.CACHE_CONTROL, "max-age=1");
-        response.headers().set(HttpHeaderNames.CONTENT_LENGTH, content.length);
-        response.headers().set("Access-Control-Allow-Origin", "*");
-        ctx.writeAndFlush(response);
+        HttpUtil.writeBytes(ctx, HttpResponseStatus.OK, content, "video/mp2t",
+                response -> {
+                    response.headers().set(HttpHeaderNames.CACHE_CONTROL, "max-age=1");
+                    response.headers().set("Access-Control-Allow-Origin", "*");
+                },
+                false);
     }
 
     private HlsPath parse(String uri) {
         if (uri == null || uri.trim().isEmpty()) {
             return null;
         }
-        String path = uri;
-        int queryIndex = path.indexOf('?');
-        if (queryIndex >= 0) {
-            path = path.substring(0, queryIndex);
-        }
+        String path = HttpUtil.extractPath(uri);
         if (!path.startsWith(HLS_PREFIX)) {
             return null;
         }
@@ -115,9 +108,6 @@ public final class HlsHandler extends SimpleChannelInboundHandler<FullHttpReques
 
     private void writeError(ChannelHandlerContext ctx, HttpResponseStatus status, String message) {
         byte[] content = message == null ? new byte[0] : message.getBytes(CharsetUtil.UTF_8);
-        DefaultFullHttpResponse response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, status, Unpooled.wrappedBuffer(content));
-        response.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/plain; charset=UTF-8");
-        response.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, content.length);
-        ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE);
+        HttpUtil.writeBytes(ctx, status, content, "text/plain; charset=UTF-8", true);
     }
 }

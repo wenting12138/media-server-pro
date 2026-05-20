@@ -9,6 +9,7 @@ import com.wenting.mediaserver.core.publish.DefaultPublishedStream;
 import com.wenting.mediaserver.core.publish.IPublishedStream;
 import com.wenting.mediaserver.core.registry.StreamRegistry;
 import com.wenting.mediaserver.protocol.http.HttpRequestHandler;
+import com.wenting.mediaserver.protocol.http.utils.HttpUtil;
 import com.wenting.mediaserver.protocol.webrtc.WebRtcPublishPeerSession;
 import com.wenting.mediaserver.protocol.webrtc.WebRtcPublishSessionManager;
 import com.wenting.mediaserver.protocol.webrtc.api.MediaStreamTrack;
@@ -17,18 +18,11 @@ import com.wenting.mediaserver.protocol.webrtc.api.RTCRtpTransceiver;
 import com.wenting.mediaserver.protocol.webrtc.api.RTCSessionDescription;
 import com.wenting.mediaserver.protocol.webrtc.transport.DatagramIoSender;
 import com.wenting.mediaserver.protocol.webrtc.transport.SessionDatagramIo;
-import io.netty.buffer.Unpooled;
-import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
-import io.netty.handler.codec.http.DefaultFullHttpResponse;
 import io.netty.handler.codec.http.FullHttpRequest;
-import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpResponseStatus;
-import io.netty.handler.codec.http.HttpVersion;
 import io.netty.util.CharsetUtil;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.net.InetSocketAddress;
 import java.util.UUID;
@@ -36,9 +30,8 @@ import java.util.UUID;
 /**
  * Minimal server-side WebRTC publish signaling endpoint.
  */
-public final class WebRtcPublishHandler implements HttpRequestHandler {
+public final class WebRtcPublishHandler extends AbstractWebRtcSessionHandler<WebRtcPublishPeerSession> {
 
-    private static final Logger log = LoggerFactory.getLogger(WebRtcPublishHandler.class);
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final String PUBLISH_PATH = "/webrtc/publish";
 
@@ -63,25 +56,25 @@ public final class WebRtcPublishHandler implements HttpRequestHandler {
     public boolean matches(FullHttpRequest request) {
         return request != null
                 && HttpMethod.POST.equals(request.method())
-                && PUBLISH_PATH.equals(extractPath(request.uri()));
+                && PUBLISH_PATH.equals(HttpUtil.extractPath(request.uri()));
     }
 
     @Override
     public void handleRequest(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {
         JsonNode root = OBJECT_MAPPER.readTree(request.content().toString(CharsetUtil.UTF_8));
-        String app = text(root, "app");
-        String streamName = text(root, "stream");
-        String offerSdp = text(root, "sdp");
-        if (isBlank(app) || isBlank(streamName) || isBlank(offerSdp)) {
-            writeJson(ctx, HttpResponseStatus.BAD_REQUEST, "{\"code\":-1,\"msg\":\"missing app/stream/sdp\"}");
+        String app = HttpUtil.text(root, "app");
+        String streamName = HttpUtil.text(root, "stream");
+        String offerSdp = HttpUtil.text(root, "sdp");
+        if (HttpUtil.isBlank(app) || HttpUtil.isBlank(streamName) || HttpUtil.isBlank(offerSdp)) {
+            HttpUtil.writeJson(ctx, HttpResponseStatus.BAD_REQUEST, "{\"code\":-1,\"msg\":\"missing app/stream/sdp\"}");
             return;
         }
         if (registry.findPublishedStreamByPath(app, streamName) != null) {
-            writeJson(ctx, HttpResponseStatus.CONFLICT, "{\"code\":-1,\"msg\":\"stream already exists\"}");
+            HttpUtil.writeJson(ctx, HttpResponseStatus.CONFLICT, "{\"code\":-1,\"msg\":\"stream already exists\"}");
             return;
         }
         if (sessionManager.findByStreamKey(new StreamKey(StreamProtocol.WEBRTC, app, streamName)) != null) {
-            writeJson(ctx, HttpResponseStatus.CONFLICT, "{\"code\":-1,\"msg\":\"stream publish already pending\"}");
+            HttpUtil.writeJson(ctx, HttpResponseStatus.CONFLICT, "{\"code\":-1,\"msg\":\"stream publish already pending\"}");
             return;
         }
 
@@ -95,7 +88,7 @@ public final class WebRtcPublishHandler implements HttpRequestHandler {
             peerConnection.setRemoteDescription(offer);
             RTCSessionDescription answer = peerConnection.createAnswer().get();
             if (!hasSupportedIncomingH264(peerConnection)) {
-                writeJson(ctx, HttpResponseStatus.BAD_REQUEST, "{\"code\":-1,\"msg\":\"H264 video publish is required\"}");
+                HttpUtil.writeJson(ctx, HttpResponseStatus.BAD_REQUEST, "{\"code\":-1,\"msg\":\"H264 video publish is required\"}");
                 return;
             }
             peerConnection.setLocalDescription(answer);
@@ -114,31 +107,21 @@ public final class WebRtcPublishHandler implements HttpRequestHandler {
                     "success",
                     new PublishResponseData(session.sessionId(), answer.getType(), answer.getSdp())
             ));
-            writeJson(ctx, HttpResponseStatus.OK, body);
+            HttpUtil.writeJson(ctx, HttpResponseStatus.OK, body);
             WebRtcPublishPeerSession managedSession = session;
             session.attachPublishedStream(stream);
             sessionManager.register(session);
             managedSession.installLifecycleCleanup(() -> closeManagedSession(managedSession));
             success = true;
         } finally {
-            if (success) {
-                return;
-            }
-            if (session != null) {
-                closeManagedSession(session);
-            } else {
-                registry.removePublishedStream(streamKey);
-                peerConnection.close();
-                datagramIo.close();
-            }
+            cleanupFailedRequest(success, session, peerConnection, datagramIo,
+                    () -> registry.removePublishedStream(streamKey));
         }
     }
 
-    private void closeManagedSession(WebRtcPublishPeerSession session) {
-        WebRtcPublishPeerSession removed = sessionManager.removeAndClose(session.sessionId());
-        if (removed == null) {
-            session.close();
-        }
+    @Override
+    protected WebRtcPublishPeerSession removeAndCloseManagedSession(String sessionId) {
+        return sessionManager.removeAndClose(sessionId);
     }
 
     private boolean hasSupportedIncomingH264(RTCPeerConnection peerConnection) {
@@ -158,35 +141,6 @@ public final class WebRtcPublishHandler implements HttpRequestHandler {
             }
         }
         return false;
-    }
-
-    private static void writeJson(ChannelHandlerContext ctx, HttpResponseStatus status, String body) {
-        byte[] content = body.getBytes(CharsetUtil.UTF_8);
-        DefaultFullHttpResponse response = new DefaultFullHttpResponse(
-                HttpVersion.HTTP_1_1,
-                status,
-                Unpooled.wrappedBuffer(content)
-        );
-        response.headers().set(HttpHeaderNames.CONTENT_TYPE, "application/json; charset=UTF-8");
-        response.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, content.length);
-        ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE);
-    }
-
-    private static String text(JsonNode node, String field) {
-        JsonNode child = node == null ? null : node.get(field);
-        return child == null || child.isNull() ? null : child.asText();
-    }
-
-    private static boolean isBlank(String value) {
-        return value == null || value.trim().isEmpty();
-    }
-
-    private static String extractPath(String uri) {
-        if (uri == null) {
-            return "";
-        }
-        int queryIndex = uri.indexOf('?');
-        return queryIndex >= 0 ? uri.substring(0, queryIndex) : uri;
     }
 
     private static final class PublishResponse {

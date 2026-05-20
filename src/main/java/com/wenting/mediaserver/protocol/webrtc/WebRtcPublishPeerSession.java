@@ -28,7 +28,7 @@ import java.util.concurrent.TimeUnit;
 /**
  * Server-side WebRTC publish session that forwards inbound SRTP media into a published stream.
  */
-public final class WebRtcPublishPeerSession implements AutoCloseable {
+public final class WebRtcPublishPeerSession implements WebRtcManagedSession {
 
     private static final long FEEDBACK_TICK_INTERVAL_MS = 50L;
 
