@@ -280,7 +280,6 @@ public class IceAgent {
                 && pair.getState() != CandidatePair.State.NOMINATED;
             if (isNewSuccess) {
                 pair.setState(CandidatePair.State.SUCCEEDED);
-                LOG.debug("ICE check succeeded: " + pair);
                 fireEvent(new IceEvent(IceEvent.Type.PAIR_SUCCEEDED, pair));
                 updateState();
             }
@@ -289,7 +288,6 @@ public class IceAgent {
             if (useCandidate && role == Role.CONTROLLED) {
                 if (pair.getState() != CandidatePair.State.NOMINATED) {
                     pair.setState(CandidatePair.State.NOMINATED);
-                    LOG.debug("Pair nominated by peer: " + pair);
                     fireEvent(new IceEvent(IceEvent.Type.NOMINATED, pair));
                     updateState();
                 }

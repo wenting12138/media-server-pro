@@ -96,8 +96,8 @@ public final class WebRtcPublishHandler implements HttpRequestHandler {
                 return;
             }
             peerConnection.setLocalDescription(answer);
-            log.info("incoming publish offer: \r\n{}", offer.getSdp());
-            log.info("create publish answer: \r\n{}", answer.getSdp());
+//            log.info("incoming publish offer: \r\n{}", offer.getSdp());
+//            log.info("create publish answer: \r\n{}", answer.getSdp());
 
             IPublishedStream stream = new DefaultPublishedStream(streamKey);
             registry.registerPublishedStream(streamKey, stream);

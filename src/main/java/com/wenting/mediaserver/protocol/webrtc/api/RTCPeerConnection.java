@@ -693,7 +693,7 @@ public class RTCPeerConnection implements AutoCloseable {
                     onIcePairSucceeded(event.getPair());
                     break;
                 case NOMINATED:
-                    LOG.debug("ICE pair nominated: " + event.getPair());
+                    onIcePairNominated(event.getPair());
                     break;
                 case STATE_CHANGED:
                     onIceStateChanged();
@@ -721,11 +721,24 @@ public class RTCPeerConnection implements AutoCloseable {
     // ========================================================================
 
     private synchronized void onIcePairSucceeded(CandidatePair pair) {
+        if (iceConnectionState == IceConnectionState.CLOSED) return;
         if (iceConnectionState == IceConnectionState.CONNECTED
-            || iceConnectionState == IceConnectionState.CLOSED) return;
-
-        this.remoteAddress = pair.getRemote().getAddress();
+            || iceConnectionState == IceConnectionState.COMPLETED) {
+            return;
+        }
         setIceState(IceConnectionState.CONNECTED);
+    }
+
+    private synchronized void onIcePairNominated(CandidatePair pair) {
+        if (pair == null || iceConnectionState == IceConnectionState.CLOSED) {
+            return;
+        }
+        this.remoteAddress = pair.getRemote().getAddress();
+        if (iceConnectionState != IceConnectionState.CONNECTED
+            && iceConnectionState != IceConnectionState.COMPLETED) {
+            setIceState(IceConnectionState.CONNECTED);
+        }
+        LOG.info("ICE pair nominated, starting DTLS: " + pair);
         startDtls(pair);
     }
 
@@ -737,7 +750,7 @@ public class RTCPeerConnection implements AutoCloseable {
                 setConnectionState(ConnectionState.FAILED);
                 break;
             case CONNECTED:
-                // Already handled via PAIR_SUCCEEDED
+                // Connectivity succeeded, but DTLS waits for nomination.
                 break;
             case COMPLETED:
                 setIceState(IceConnectionState.COMPLETED);
