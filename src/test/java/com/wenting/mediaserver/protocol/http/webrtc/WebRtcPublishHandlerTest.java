@@ -38,7 +38,7 @@ class WebRtcPublishHandlerTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Test
-    void shouldReturnAnswerAndRegisterPublishedStream() throws Exception {
+    void shouldReturnAnswerAndDelayPublishedStreamRegistrationUntilConnected() throws Exception {
         StreamRegistry registry = new StreamRegistry();
         WebRtcPublishSessionManager sessionManager = new WebRtcPublishSessionManager();
         EmbeddedChannel channel = new EmbeddedChannel(
@@ -65,7 +65,13 @@ class WebRtcPublishHandlerTest {
         assertTrue(answerSdp.contains("a=setup:passive\r\n"));
         assertEquals(1, sessionManager.count());
 
-        IPublishedStream stream = registry.findPublishedStream(new StreamKey(StreamProtocol.WEBRTC, "live", "cam01"));
+        StreamKey streamKey = new StreamKey(StreamProtocol.WEBRTC, "live", "cam01");
+        assertNull(registry.findPublishedStream(streamKey));
+
+        WebRtcPublishPeerSession session = sessionManager.sessions().iterator().next();
+        emitConnectionState(session.peerConnection(), RTCPeerConnection.ConnectionState.CONNECTED);
+
+        IPublishedStream stream = registry.findPublishedStream(streamKey);
         assertNotNull(stream);
 
         response.release();
@@ -122,7 +128,7 @@ class WebRtcPublishHandlerTest {
         JsonNode root = objectMapper.readTree(response.content().toString(CharsetUtil.UTF_8));
         assertEquals(0, root.get("code").asInt());
         assertEquals(1, sessionManager.count());
-        assertNotNull(registry.findPublishedStream(new StreamKey(StreamProtocol.WEBRTC, "live", "cam01")));
+        assertNull(registry.findPublishedStream(new StreamKey(StreamProtocol.WEBRTC, "live", "cam01")));
         response.release();
         channel.finishAndReleaseAll();
         sessionManager.close();
@@ -146,14 +152,17 @@ class WebRtcPublishHandlerTest {
         FullHttpResponse response = channel.readOutbound();
         assertEquals(200, response.status().code());
         WebRtcPublishPeerSession session = sessionManager.sessions().iterator().next();
-        IPublishedStream stream = registry.findPublishedStream(new StreamKey(StreamProtocol.WEBRTC, "live", "cam03"));
+        StreamKey streamKey = new StreamKey(StreamProtocol.WEBRTC, "live", "cam03");
+        assertNull(registry.findPublishedStream(streamKey));
         RTCRtpReceiver receiver = firstVideoReceiver(session.peerConnection());
         assertNotNull(receiver);
 
         receiver.getOnPacket().accept(videoPacket(0x01020304L, 3000L, 1));
-        assertNull(stream.latestTrackSsrc("video-0"));
+        assertNull(registry.findPublishedStream(streamKey));
 
         emitConnectionState(session.peerConnection(), RTCPeerConnection.ConnectionState.CONNECTED);
+        IPublishedStream stream = registry.findPublishedStream(streamKey);
+        assertNotNull(stream);
         receiver.getOnPacket().accept(videoPacket(0x01020304L, 6000L, 2));
 
         assertEquals(0x01020304L, stream.latestTrackSsrc("video-0"));
@@ -186,6 +195,45 @@ class WebRtcPublishHandlerTest {
         assertEquals(0, sessionManager.count());
         response.release();
         channel.finishAndReleaseAll();
+        sessionManager.close();
+    }
+
+    @Test
+    void shouldRejectDuplicatePendingPublishSessionForSamePath() {
+        StreamRegistry registry = new StreamRegistry();
+        WebRtcPublishSessionManager sessionManager = new WebRtcPublishSessionManager();
+        EmbeddedChannel firstChannel = new EmbeddedChannel(
+                new HttpRouterHandler(new WebRtcPublishHandler(
+                        registry,
+                        sessionManager,
+                        new InetSocketAddress("192.168.3.52", 18081),
+                        new NoopDatagramIoSender()
+                ))
+        );
+
+        firstChannel.writeInbound(request("{\"app\":\"live\",\"stream\":\"cam04\",\"sdp\":\"" + escapeJson(publishOfferWithH264()) + "\"}"));
+        FullHttpResponse firstResponse = firstChannel.readOutbound();
+        assertEquals(200, firstResponse.status().code());
+        assertEquals(1, sessionManager.count());
+        assertNull(registry.findPublishedStream(new StreamKey(StreamProtocol.WEBRTC, "live", "cam04")));
+
+        EmbeddedChannel secondChannel = new EmbeddedChannel(
+                new HttpRouterHandler(new WebRtcPublishHandler(
+                        registry,
+                        sessionManager,
+                        new InetSocketAddress("192.168.3.52", 18081),
+                        new NoopDatagramIoSender()
+                ))
+        );
+        secondChannel.writeInbound(request("{\"app\":\"live\",\"stream\":\"cam04\",\"sdp\":\"" + escapeJson(publishOfferWithH264()) + "\"}"));
+        FullHttpResponse secondResponse = secondChannel.readOutbound();
+        assertEquals(409, secondResponse.status().code());
+        assertEquals(1, sessionManager.count());
+
+        firstResponse.release();
+        secondResponse.release();
+        firstChannel.finishAndReleaseAll();
+        secondChannel.finishAndReleaseAll();
         sessionManager.close();
     }
 

@@ -80,10 +80,15 @@ public final class WebRtcPublishHandler implements HttpRequestHandler {
             writeJson(ctx, HttpResponseStatus.CONFLICT, "{\"code\":-1,\"msg\":\"stream already exists\"}");
             return;
         }
+        if (sessionManager.findByStreamKey(new StreamKey(StreamProtocol.WEBRTC, app, streamName)) != null) {
+            writeJson(ctx, HttpResponseStatus.CONFLICT, "{\"code\":-1,\"msg\":\"stream publish already pending\"}");
+            return;
+        }
 
         SessionDatagramIo datagramIo = new SessionDatagramIo(localUdpAddress, datagramSender);
         RTCPeerConnection peerConnection = new RTCPeerConnection(datagramIo);
         WebRtcPublishPeerSession session = null;
+        boolean success = false;
         StreamKey streamKey = new StreamKey(StreamProtocol.WEBRTC, app, streamName);
         try {
             RTCSessionDescription offer = new RTCSessionDescription("offer", offerSdp);
@@ -111,11 +116,14 @@ public final class WebRtcPublishHandler implements HttpRequestHandler {
             ));
             writeJson(ctx, HttpResponseStatus.OK, body);
             WebRtcPublishPeerSession managedSession = session;
-            managedSession.installLifecycleCleanup(() -> closeManagedSession(managedSession));
             session.attachPublishedStream(stream);
             sessionManager.register(session);
-            registry.registerPublishedStream(streamKey, stream);
+            managedSession.installLifecycleCleanup(() -> closeManagedSession(managedSession));
+            success = true;
         } finally {
+            if (success) {
+                return;
+            }
             if (session != null) {
                 closeManagedSession(session);
             } else {

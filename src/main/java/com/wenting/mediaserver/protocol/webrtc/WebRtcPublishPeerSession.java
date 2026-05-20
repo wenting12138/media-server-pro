@@ -40,6 +40,7 @@ public final class WebRtcPublishPeerSession implements AutoCloseable {
     private final WebRtcIngestFeedbackController feedbackController;
     private final ScheduledExecutorService feedbackExecutor;
     private final AtomicBoolean lifecycleCleanupInstalled = new AtomicBoolean(false);
+    private final AtomicBoolean publishedStreamRegistered = new AtomicBoolean(false);
     private final RTCPeerConnection.ListenerSubscription rtcpPacketSubscription;
     private final AtomicBoolean ingestActivated = new AtomicBoolean(false);
     private final AtomicBoolean closed = new AtomicBoolean(false);
@@ -90,6 +91,7 @@ public final class WebRtcPublishPeerSession implements AutoCloseable {
 
     public void attachPublishedStream(IPublishedStream stream) {
         this.publishedStream = stream;
+        registerPublishedStreamIfReady();
     }
 
     public void activateIngest() {
@@ -105,6 +107,7 @@ public final class WebRtcPublishPeerSession implements AutoCloseable {
         }
         connectionStateSubscription = peerConnection.addConnectionStateListener(state -> {
             if (state == RTCPeerConnection.ConnectionState.CONNECTED) {
+                registerPublishedStreamIfReady();
                 activateIngest();
             }
             if (state == RTCPeerConnection.ConnectionState.FAILED
@@ -119,6 +122,7 @@ public final class WebRtcPublishPeerSession implements AutoCloseable {
             }
         });
         if (peerConnection.getConnectionState() == RTCPeerConnection.ConnectionState.CONNECTED) {
+            registerPublishedStreamIfReady();
             activateIngest();
         }
     }
@@ -187,6 +191,20 @@ public final class WebRtcPublishPeerSession implements AutoCloseable {
         return peerConnection.addRtcpPacketListener(packet -> {
             feedbackController.onRtcpPacket(packet);
         });
+    }
+
+    private void registerPublishedStreamIfReady() {
+        if (closed.get()) {
+            return;
+        }
+        if (peerConnection.getConnectionState() != RTCPeerConnection.ConnectionState.CONNECTED) {
+            return;
+        }
+        IPublishedStream stream = publishedStream;
+        if (stream == null || !publishedStreamRegistered.compareAndSet(false, true)) {
+            return;
+        }
+        registry.registerPublishedStream(streamKey, stream);
     }
 
     private void runCleanupAction(Runnable cleanupAction) {
