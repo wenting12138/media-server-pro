@@ -160,7 +160,30 @@ final class H264Avcc420pTranscoderTest {
         }
     }
 
+    @Test
+    void shouldUseSourceTimestampsForEncodePts() throws Exception {
+        H264Avcc420pTranscoder transcoder = new H264Avcc420pTranscoder();
+        try {
+            Method nextEncodePts = H264Avcc420pTranscoder.class.getDeclaredMethod("nextEncodePts", InboundMediaFrame.class);
+            nextEncodePts.setAccessible(true);
+
+            long first = (Long) nextEncodePts.invoke(transcoder, frame(false, false, new byte[]{0x01}, 100L));
+            long second = (Long) nextEncodePts.invoke(transcoder, frame(false, false, new byte[]{0x02}, 140L));
+            long third = (Long) nextEncodePts.invoke(transcoder, frame(false, false, new byte[]{0x03}, 180L));
+
+            Assertions.assertEquals(0L, first);
+            Assertions.assertEquals(40L, second);
+            Assertions.assertEquals(80L, third);
+        } finally {
+            transcoder.close();
+        }
+    }
+
     private InboundMediaFrame frame(boolean keyFrame, boolean configFrame, byte[] payload) {
+        return frame(keyFrame, configFrame, payload, 0L);
+    }
+
+    private InboundMediaFrame frame(boolean keyFrame, boolean configFrame, byte[] payload, long timestampMs) {
         return new InboundMediaFrame(
                 StreamProtocol.RTMP,
                 TrackType.VIDEO,
@@ -168,8 +191,8 @@ final class H264Avcc420pTranscoderTest {
                 "session-1",
                 new StreamKey(StreamProtocol.RTMP, "live", "camera"),
                 "video-h264",
-                0L,
-                0L,
+                timestampMs,
+                timestampMs,
                 keyFrame,
                 configFrame,
                 null,

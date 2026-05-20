@@ -73,7 +73,8 @@ public final class H264Avcc420pTranscoder implements VideoFrameTranscoder {
     private boolean decoderReady;
     private boolean encoderReady;
     private boolean decoderPrimed;
-    private long encPts;
+    private Long firstSourceTimestampMs;
+    private long lastEncodePts = Long.MIN_VALUE;
     private volatile boolean forceNextKeyFrameRequested;
 
     @Override
@@ -142,7 +143,7 @@ public final class H264Avcc420pTranscoder implements VideoFrameTranscoder {
                     forceNextKeyFrameRequested = false;
                 }
             }
-            frameForEncode.pts(encPts++);
+            frameForEncode.pts(nextEncodePts(sourceFrame.sourceFrame()));
             rc = avcodec_send_frame(encCtx, frameForEncode);
             if (rc < 0) {
                 continue;
@@ -208,6 +209,39 @@ public final class H264Avcc420pTranscoder implements VideoFrameTranscoder {
         if (changed) {
             decoderPrimed = false;
         }
+    }
+
+    private long nextEncodePts(InboundMediaFrame sourceFrame) {
+        Long sourceTimestampMs = sourceTimestampMillis(sourceFrame);
+        if (sourceTimestampMs == null) {
+            if (lastEncodePts == Long.MIN_VALUE) {
+                lastEncodePts = 0L;
+            } else {
+                lastEncodePts++;
+            }
+            return lastEncodePts;
+        }
+        if (firstSourceTimestampMs == null) {
+            firstSourceTimestampMs = sourceTimestampMs;
+        }
+        long normalized = Math.max(0L, sourceTimestampMs.longValue() - firstSourceTimestampMs.longValue());
+        if (lastEncodePts == Long.MIN_VALUE) {
+            lastEncodePts = normalized;
+            return lastEncodePts;
+        }
+        if (normalized <= lastEncodePts) {
+            lastEncodePts++;
+            return lastEncodePts;
+        }
+        lastEncodePts = normalized;
+        return lastEncodePts;
+    }
+
+    private Long sourceTimestampMillis(InboundMediaFrame sourceFrame) {
+        if (sourceFrame == null) {
+            return null;
+        }
+        return sourceFrame.ptsMillis() == null ? sourceFrame.dtsMillis() : sourceFrame.ptsMillis();
     }
 
     private boolean hasInputParameterSets() {
@@ -634,6 +668,8 @@ public final class H264Avcc420pTranscoder implements VideoFrameTranscoder {
         decoderReady = false;
         encoderReady = false;
         decoderPrimed = false;
+        firstSourceTimestampMs = null;
+        lastEncodePts = Long.MIN_VALUE;
     }
 
     private static int avPacketUnrefAndNewData(AVPacket packet, byte[] data) {

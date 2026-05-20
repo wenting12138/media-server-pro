@@ -1,5 +1,6 @@
 package com.wenting.mediaserver.core.transcode.orchestrator;
 
+import com.wenting.mediaserver.core.enums.StreamProtocol;
 import com.wenting.mediaserver.core.model.StreamKey;
 import com.wenting.mediaserver.core.publish.InboundMediaFrame;
 import com.wenting.mediaserver.core.publish.InboundRtpPacket;
@@ -24,6 +25,7 @@ final class TranscodeWorker implements Runnable {
 
     private static final Logger log = LoggerFactory.getLogger(TranscodeWorker.class);
     private static final long STALE_VIDEO_FRAME_DROP_THRESHOLD_MS = 1500L;
+    private static final long STALE_WEBRTC_VIDEO_FRAME_DROP_THRESHOLD_MS = 500L;
 
     private final StreamKey sourceKey;
     private final StreamKey derivedKey;
@@ -230,7 +232,8 @@ final class TranscodeWorker implements Runnable {
         if (latestKeyFrame != null
                 && latestKeyFrame != incomingFrame
                 && !incomingFrame.keyFrame()
-                && !latestKeyFrame.configFrame()) {
+                && !latestKeyFrame.configFrame()
+                && !usesAggressiveRealtimeBacklog()) {
             queue.offer(latestKeyFrame);
         }
         queue.offer(incomingFrame);
@@ -314,7 +317,7 @@ final class TranscodeWorker implements Runnable {
             return false;
         }
         long lagMs = latestTimestampMs - frameTimestampMs.longValue();
-        if (lagMs <= STALE_VIDEO_FRAME_DROP_THRESHOLD_MS) {
+        if (lagMs <= staleFrameDropThresholdMs()) {
             return false;
         }
         long count = staleDropCount.incrementAndGet();
@@ -380,5 +383,15 @@ final class TranscodeWorker implements Runnable {
                 transcoder = null;
             }
         }
+    }
+
+    private boolean usesAggressiveRealtimeBacklog() {
+        return sourceKey != null && sourceKey.protocol() == StreamProtocol.WEBRTC;
+    }
+
+    private long staleFrameDropThresholdMs() {
+        return usesAggressiveRealtimeBacklog()
+                ? STALE_WEBRTC_VIDEO_FRAME_DROP_THRESHOLD_MS
+                : STALE_VIDEO_FRAME_DROP_THRESHOLD_MS;
     }
 }

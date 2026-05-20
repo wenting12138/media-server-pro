@@ -39,6 +39,7 @@ public final class WebRtcPlaybackStreamTransformOrchestrator implements StreamTr
 
     private static final Logger log = LoggerFactory.getLogger(WebRtcPlaybackStreamTransformOrchestrator.class);
     private static final int DEFAULT_VIDEO_QUEUE_SIZE = 6;
+    private static final int WEBRTC_SOURCE_VIDEO_QUEUE_SIZE = 3;
     private static final int DEFAULT_AUDIO_QUEUE_SIZE = 12;
 
     private final StreamRegistry registry;
@@ -292,7 +293,7 @@ public final class WebRtcPlaybackStreamTransformOrchestrator implements StreamTr
                 canonicalizer,
                 transcoderFactory,
                 new WebRtcH264ProfileDecisionPolicy(),
-                videoQueueSize
+                resolveVideoQueueSize(sourceKey)
         );
         TranscodeWorker existing = videoWorkersBySourceKey.putIfAbsent(sourceKey, created);
         if (existing != null) {
@@ -452,5 +453,12 @@ public final class WebRtcPlaybackStreamTransformOrchestrator implements StreamTr
         IPublishedStream stream = registry.findPublishedStream(sourceKey);
         Long ssrc = stream == null ? null : stream.latestTrackSsrc(trackId);
         return ssrc == null ? 0L : (ssrc.longValue() & 0xFFFFFFFFL);
+    }
+
+    private int resolveVideoQueueSize(StreamKey sourceKey) {
+        if (sourceKey != null && sourceKey.protocol() == StreamProtocol.WEBRTC) {
+            return Math.min(videoQueueSize, WEBRTC_SOURCE_VIDEO_QUEUE_SIZE);
+        }
+        return videoQueueSize;
     }
 }
