@@ -58,7 +58,7 @@ final class StreamRegistryWebRtcPlaybackTest {
 
             IPublishedStream derived = registry.findPublishedStreamByPath("live", "browser01__webrtc");
             Assertions.assertNotNull(derived);
-            Assertions.assertSame(sourceStream, registry.findPublishedStreamForWebRtcPlayback("live", "browser01"));
+            Assertions.assertSame(derived, registry.findPublishedStreamForWebRtcPlayback("live", "browser01"));
             Assertions.assertSame(derived, registry.findPublishedStreamForRtspPlayback("live", "browser01"));
             Assertions.assertSame(derived, registry.findPublishedStreamForRtmpPlayback("live", "browser01"));
             Assertions.assertSame(derived, registry.findPublishedStreamForHttpFlvPlayback("live", "browser01"));

@@ -252,7 +252,7 @@ final class AudioTranscodeWorker implements Runnable {
                     continue;
                 }
                 if (transformDecision == TransformDecision.PASSTHROUGH) {
-                    publisher.publish(derivedKey, copyAsDerivedFrame(frame.sourceFrame()));
+                    publisher.publish(derivedKey, copyAsDerivedFrame(frame));
                     continue;
                 }
                 AudioFrameTranscoder activeTranscoder = ensureTranscoder();
@@ -302,24 +302,25 @@ final class AudioTranscodeWorker implements Runnable {
         return sourceFrame.ptsMillis() == null ? sourceFrame.dtsMillis() : sourceFrame.ptsMillis();
     }
 
-    private InboundMediaFrame copyAsDerivedFrame(InboundMediaFrame sourceFrame) {
-        if (sourceFrame == null) {
+    private InboundMediaFrame copyAsDerivedFrame(CanonicalAudioFrame frame) {
+        InboundMediaFrame sourceFrame = frame == null ? null : frame.sourceFrame();
+        if (sourceFrame == null || frame == null) {
             return null;
         }
         return new InboundMediaFrame(
                 sourceFrame.sourceProtocol(),
                 sourceFrame.trackType(),
-                sourceFrame.codecType(),
+                frame.codecType(),
                 sourceFrame.sessionId(),
                 derivedKey,
                 sourceFrame.trackId(),
                 sourceFrame.ptsMillis(),
                 sourceFrame.dtsMillis(),
                 sourceFrame.keyFrame(),
-                sourceFrame.configFrame(),
+                frame.configFrame(),
                 sourceFrame.outOfBandParameterSetsReady(),
                 sourceFrame.remoteAddress(),
-                sourceFrame.payload()
+                frame.payload()
         );
     }
 

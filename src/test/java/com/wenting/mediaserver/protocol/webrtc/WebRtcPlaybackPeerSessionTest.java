@@ -478,6 +478,39 @@ public class WebRtcPlaybackPeerSessionTest {
     }
 
     @Test
+    public void shouldReplayWebRtcSourceParameterSetsBeforeFirstStartupKeyFrame() throws Exception {
+        RecordingDatagramIoSender sender = new RecordingDatagramIoSender();
+        SessionDatagramIo datagramIo = new SessionDatagramIo(new InetSocketAddress("127.0.0.1", 18081), sender);
+        RTCPeerConnection peerConnection = new RTCPeerConnection(datagramIo);
+        RTCRtpTransceiver transceiver = peerConnection.addTrack(new MediaStreamTrack(MediaStreamTrack.Kind.VIDEO, "video"));
+        transceiver.setNegotiatedPayloadType(Integer.valueOf(96));
+        transceiver.setNegotiatedClockRate(Integer.valueOf(90000));
+        transceiver.setNegotiatedCodecType(CodecType.H264);
+        transceiver.getSender().setSrtpContext(SrtpCryptoContext.fromKeyMaterial(keyMaterial(), true));
+        StreamKey streamKey = new StreamKey(StreamProtocol.WEBRTC, "live", "browser-cam");
+        WebRtcPlaybackPeerSession session = new WebRtcPlaybackPeerSession("sess-10c", streamKey, peerConnection, datagramIo);
+
+        try {
+            session.receive(new byte[0], new InetSocketAddress("127.0.0.1", 50019));
+            session.writeMediaPacket(webRtcVideoPacket(streamKey, 14, 123510L, false, new byte[]{0x67, 0x64, 0x00, 0x1F}));
+            session.writeMediaPacket(webRtcVideoPacket(streamKey, 15, 123510L, false, new byte[]{0x68, (byte) 0xEE, 0x3C, (byte) 0x80}));
+            session.writeMediaPacket(webRtcVideoPacket(streamKey, 16, 123520L, true, new byte[]{0x65, 0x31, 0x32, 0x33}));
+
+            assertEquals(3, sender.sentPackets.size());
+            SrtpTransform decrypt = new SrtpTransform(SrtpCryptoContext.fromKeyMaterial(keyMaterial(), true), transceiver.getSender().getSsrc());
+            RtpPacket sps = decrypt.unprotect(sender.sentPackets.get(0).data);
+            RtpPacket pps = decrypt.unprotect(sender.sentPackets.get(1).data);
+            RtpPacket idr = decrypt.unprotect(sender.sentPackets.get(2).data);
+            assertArrayEquals(new byte[]{0x67, 0x64, 0x00, 0x1F}, sps.getPayload());
+            assertArrayEquals(new byte[]{0x68, (byte) 0xEE, 0x3C, (byte) 0x80}, pps.getPayload());
+            assertArrayEquals(new byte[]{0x65, 0x31, 0x32, 0x33}, idr.getPayload());
+            assertEquals(123520L, idr.getTimestamp());
+        } finally {
+            session.close();
+        }
+    }
+
+    @Test
     public void shouldFlushQueuedVideoStartupFramesWhenSrtpContextBecomesReady() throws Exception {
         RecordingDatagramIoSender sender = new RecordingDatagramIoSender();
         SessionDatagramIo datagramIo = new SessionDatagramIo(new InetSocketAddress("127.0.0.1", 18081), sender);

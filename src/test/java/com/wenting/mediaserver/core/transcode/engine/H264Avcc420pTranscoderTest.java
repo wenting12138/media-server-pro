@@ -104,6 +104,32 @@ final class H264Avcc420pTranscoderTest {
         }
     }
 
+    @Test
+    void shouldNotResetDecoderPrimedWhenCodecConfigIsUnchanged() throws Exception {
+        H264Avcc420pTranscoder transcoder = new H264Avcc420pTranscoder();
+        try {
+            Method applyCodecConfig = H264Avcc420pTranscoder.class.getDeclaredMethod("applyCodecConfig", H264CodecConfig.class);
+            applyCodecConfig.setAccessible(true);
+            Field decoderPrimed = H264Avcc420pTranscoder.class.getDeclaredField("decoderPrimed");
+            decoderPrimed.setAccessible(true);
+
+            H264CodecConfig config = new H264CodecConfig(
+                    4,
+                    new byte[]{0x67, 0x42, 0x00, 0x1f},
+                    new byte[]{0x68, 0x00},
+                    "42001f"
+            );
+            applyCodecConfig.invoke(transcoder, config);
+            decoderPrimed.set(transcoder, Boolean.TRUE);
+
+            applyCodecConfig.invoke(transcoder, config);
+
+            Assertions.assertTrue((Boolean) decoderPrimed.get(transcoder));
+        } finally {
+            transcoder.close();
+        }
+    }
+
     private InboundMediaFrame frame(boolean keyFrame, boolean configFrame, byte[] payload) {
         return new InboundMediaFrame(
                 StreamProtocol.RTMP,

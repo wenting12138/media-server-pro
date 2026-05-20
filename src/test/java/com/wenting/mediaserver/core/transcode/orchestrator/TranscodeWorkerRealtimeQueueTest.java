@@ -112,6 +112,39 @@ final class TranscodeWorkerRealtimeQueueTest {
     }
 
     @Test
+    void shouldPublishCanonicalPayloadDuringPassthrough() throws Exception {
+        StreamKey sourceKey = new StreamKey(StreamProtocol.WEBRTC, "live", "camera");
+        StreamKey derivedKey = new StreamKey(StreamProtocol.WEBRTC, "live", "camera__webrtc");
+        CollectingPublisher publisher = new CollectingPublisher();
+        TranscodeWorker worker = TranscodeWorker.start(
+                sourceKey,
+                derivedKey,
+                publisher,
+                new RewritingCanonicalizer(new byte[]{0x00, 0x00, 0x00, 0x01, 0x65, 0x11, 0x22, 0x33}),
+                new SlowPassthroughTranscoderFactory(),
+                new AlwaysPassthroughDecisionPolicy(),
+                3
+        );
+        try {
+            worker.enqueueFrame(frame(0, true, true));
+            worker.enqueueFrame(frame(1, true, false));
+            worker.setPlaybackActive(true);
+
+            waitForFrameCount(publisher.frames(), 2, 5000L);
+
+            List<InboundMediaFrame> outputs = publisher.frames();
+            Assertions.assertFalse(outputs.isEmpty());
+            InboundMediaFrame mediaFrame = outputs.get(outputs.size() - 1);
+            Assertions.assertArrayEquals(new byte[]{0x00, 0x00, 0x00, 0x01, 0x65, 0x11, 0x22, 0x33}, mediaFrame.payload());
+            Assertions.assertEquals(derivedKey, mediaFrame.streamKey());
+            Assertions.assertTrue(mediaFrame.keyFrame());
+            Assertions.assertFalse(mediaFrame.configFrame());
+        } finally {
+            worker.stop();
+        }
+    }
+
+    @Test
     void shouldDropStaleIntermediateFramesToFavorRealtime() throws Exception {
         StreamKey sourceKey = new StreamKey(StreamProtocol.RTMP, "live", "camera");
         StreamKey derivedKey = new StreamKey(StreamProtocol.RTMP, "live", "camera__webrtc");
@@ -129,8 +162,8 @@ final class TranscodeWorkerRealtimeQueueTest {
             worker.setPlaybackActive(true);
             worker.enqueueFrame(frame(0, true, true, 0L));
             worker.enqueueFrame(frame(1, true, false, 40L));
-            worker.enqueueFrame(frame(2, false, false, 400L));
-            worker.enqueueFrame(frame(3, false, false, 800L));
+            worker.enqueueFrame(frame(2, false, false, 2000L));
+            worker.enqueueFrame(frame(3, false, false, 4000L));
 
             waitForLastPayload(publisher.frames(), (byte) 3, 5000L);
 
@@ -153,6 +186,17 @@ final class TranscodeWorkerRealtimeQueueTest {
             Thread.sleep(50L);
         }
         Assertions.fail("Timed out waiting for payload byte " + payloadByte);
+    }
+
+    private static void waitForFrameCount(List<InboundMediaFrame> outputs, int expectedCount, long timeoutMs) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + timeoutMs;
+        while (System.currentTimeMillis() < deadline) {
+            if (outputs.size() >= expectedCount) {
+                return;
+            }
+            Thread.sleep(50L);
+        }
+        Assertions.fail("Timed out waiting for frame count " + expectedCount + ", actual=" + outputs.size());
     }
 
     private static boolean containsPayload(List<InboundMediaFrame> outputs, byte payloadByte) {
@@ -218,6 +262,31 @@ final class TranscodeWorkerRealtimeQueueTest {
                     frame,
                     VideoPayloadFormat.H264_AVCC,
                     frame.payload(),
+                    frame.keyFrame(),
+                    frame.configFrame(),
+                    new H264CodecConfig(4, new byte[]{0x67, 0x42, 0x00, 0x1f}, new byte[]{0x68, 0x00}, "42001f")
+            );
+        }
+
+        @Override
+        public void close() {
+        }
+    }
+
+    private static final class RewritingCanonicalizer implements VideoFrameCanonicalizer {
+
+        private final byte[] canonicalPayload;
+
+        private RewritingCanonicalizer(byte[] canonicalPayload) {
+            this.canonicalPayload = canonicalPayload;
+        }
+
+        @Override
+        public CanonicalVideoFrame canonicalize(InboundMediaFrame frame) {
+            return new CanonicalVideoFrame(
+                    frame,
+                    VideoPayloadFormat.H264_AVCC,
+                    canonicalPayload,
                     frame.keyFrame(),
                     frame.configFrame(),
                     new H264CodecConfig(4, new byte[]{0x67, 0x42, 0x00, 0x1f}, new byte[]{0x68, 0x00}, "42001f")

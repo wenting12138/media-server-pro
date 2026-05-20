@@ -25,6 +25,17 @@ final class WebRtcH264ProfileDecisionPolicyTest {
     }
 
     @Test
+    void choosesTranscodeForWebRtcSourceEvenIfBaselineProfileLooksSafe() {
+        WebRtcH264ProfileDecisionPolicy policy = new WebRtcH264ProfileDecisionPolicy();
+        TransformDecision decision = policy.decide(
+                new StreamKey(StreamProtocol.WEBRTC, "live", "browser"),
+                frame("424020"),
+                TransformDecision.PENDING
+        );
+        Assertions.assertEquals(TransformDecision.TRANSCODE, decision);
+    }
+
+    @Test
     void choosesTranscodeForHigh422Profiles() {
         WebRtcH264ProfileDecisionPolicy policy = new WebRtcH264ProfileDecisionPolicy();
         TransformDecision decision = policy.decide(

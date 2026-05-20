@@ -196,10 +196,17 @@ public final class H264Avcc420pTranscoder implements VideoFrameTranscoder {
         if (codecConfig == null) {
             return;
         }
+        byte[] nextSps = codecConfig.sps();
+        byte[] nextPps = codecConfig.pps();
+        boolean changed = nalLengthSize != codecConfig.nalLengthSize()
+                || !Arrays.equals(sps, nextSps)
+                || !Arrays.equals(pps, nextPps);
         nalLengthSize = codecConfig.nalLengthSize();
-        sps = codecConfig.sps();
-        pps = codecConfig.pps();
-        decoderPrimed = false;
+        sps = nextSps;
+        pps = nextPps;
+        if (changed) {
+            decoderPrimed = false;
+        }
     }
 
     private boolean hasInputParameterSets() {

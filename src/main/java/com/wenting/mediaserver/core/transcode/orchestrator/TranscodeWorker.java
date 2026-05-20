@@ -23,7 +23,7 @@ import java.util.concurrent.atomic.AtomicLong;
 final class TranscodeWorker implements Runnable {
 
     private static final Logger log = LoggerFactory.getLogger(TranscodeWorker.class);
-    private static final long STALE_VIDEO_FRAME_DROP_THRESHOLD_MS = 250L;
+    private static final long STALE_VIDEO_FRAME_DROP_THRESHOLD_MS = 1500L;
 
     private final StreamKey sourceKey;
     private final StreamKey derivedKey;
@@ -278,7 +278,7 @@ final class TranscodeWorker implements Runnable {
                     continue;
                 }
                 if (transformDecision == TransformDecision.PASSTHROUGH) {
-                    publisher.publish(derivedKey, copyAsDerivedFrame(frame.sourceFrame()));
+                    publisher.publish(derivedKey, copyAsDerivedFrame(frame));
                     continue;
                 }
                 VideoFrameTranscoder activeTranscoder = ensureTranscoder();
@@ -310,6 +310,9 @@ final class TranscodeWorker implements Runnable {
         if (frameTimestampMs == null || latestTimestampMs == Long.MIN_VALUE) {
             return false;
         }
+        if (queue.isEmpty()) {
+            return false;
+        }
         long lagMs = latestTimestampMs - frameTimestampMs.longValue();
         if (lagMs <= STALE_VIDEO_FRAME_DROP_THRESHOLD_MS) {
             return false;
@@ -330,8 +333,9 @@ final class TranscodeWorker implements Runnable {
         return sourceFrame.ptsMillis() == null ? sourceFrame.dtsMillis() : sourceFrame.ptsMillis();
     }
 
-    private InboundMediaFrame copyAsDerivedFrame(InboundMediaFrame sourceFrame) {
-        if (sourceFrame == null) {
+    private InboundMediaFrame copyAsDerivedFrame(CanonicalVideoFrame frame) {
+        InboundMediaFrame sourceFrame = frame == null ? null : frame.sourceFrame();
+        if (sourceFrame == null || frame == null) {
             return null;
         }
         return new InboundMediaFrame(
@@ -343,11 +347,11 @@ final class TranscodeWorker implements Runnable {
                 sourceFrame.trackId(),
                 sourceFrame.ptsMillis(),
                 sourceFrame.dtsMillis(),
-                sourceFrame.keyFrame(),
-                sourceFrame.configFrame(),
+                frame.keyFrame(),
+                frame.configFrame(),
                 sourceFrame.outOfBandParameterSetsReady(),
                 sourceFrame.remoteAddress(),
-            sourceFrame.payload()
+                frame.payload()
         );
     }
 

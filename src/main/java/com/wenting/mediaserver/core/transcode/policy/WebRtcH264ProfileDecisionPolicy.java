@@ -1,5 +1,6 @@
 package com.wenting.mediaserver.core.transcode.policy;
 
+import com.wenting.mediaserver.core.enums.StreamProtocol;
 import com.wenting.mediaserver.core.model.StreamKey;
 import com.wenting.mediaserver.core.transcode.canonical.CanonicalVideoFrame;
 import com.wenting.mediaserver.core.transcode.canonical.H264CodecConfig;
@@ -22,6 +23,11 @@ public final class WebRtcH264ProfileDecisionPolicy implements TranscodeDecisionP
         if (config == null || !config.complete()) {
             return TransformDecision.PENDING;
         }
+        if (sourceKey != null && sourceKey.protocol() == StreamProtocol.WEBRTC) {
+            return isPreferredWebRtcPassthroughProfile(config.profileLevelId())
+                    ? TransformDecision.PASSTHROUGH
+                    : TransformDecision.TRANSCODE;
+        }
         int profileIdc = parseProfileIdc(config.profileLevelId());
         if (profileIdc == 0x42) {
             return TransformDecision.PASSTHROUGH;
@@ -38,5 +44,9 @@ public final class WebRtcH264ProfileDecisionPolicy implements TranscodeDecisionP
         } catch (NumberFormatException e) {
             return -1;
         }
+    }
+
+    private boolean isPreferredWebRtcPassthroughProfile(String profileLevelId) {
+        return "42001f".equalsIgnoreCase(profileLevelId);
     }
 }

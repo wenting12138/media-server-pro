@@ -114,9 +114,6 @@ public final class StreamRegistry {
         if (source == null) {
             return null;
         }
-        if (source.getProtocol() == StreamProtocol.WEBRTC) {
-            return source;
-        }
         IPublishedStream derived = findPublishedStreamByPath(app, stream + webRtcPlaybackSuffix);
         return derived == null ? source : derived;
     }

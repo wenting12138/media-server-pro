@@ -182,7 +182,10 @@ public final class WebRtcPlaybackPeerSession implements WebRtcManagedSession {
                 queuePendingSourcePacket(packet);
                 return;
             }
-            if (!canRelaySourcePacketNow(packet)) {
+            String trackId = WebrtcPlayUtil.normalizeTrackId(packet.frame().trackId());
+            if (!isStarted(trackId)) {
+                queuePendingSourcePacket(packet);
+                flushPendingSourcePacketsIfReady();
                 return;
             }
             relaySourceRtpPacket(packet);
@@ -482,11 +485,26 @@ public final class WebRtcPlaybackPeerSession implements WebRtcManagedSession {
                 continue;
             }
             pendingSourcePacketsByTrackId.remove(trackId);
-            for (InboundRtpPacket pendingPacket : pendingPackets) {
-                if (pendingPacket != null
-                        && canRelaySourceRtpPacket(pendingPacket)
-                        && canRelaySourcePacketNow(pendingPacket)) {
-                    relaySourceRtpPacket(pendingPacket);
+            int startupIndex = findStartupPacketIndex(pendingPackets);
+            if (!isStarted(trackId) && startupIndex < 0) {
+                pendingSourcePacketsByTrackId.put(trackId, pendingPackets);
+                continue;
+            }
+            if (!isStarted(trackId)) {
+                startedTracksByTrackId.put(trackId, Boolean.TRUE);
+            }
+            for (int i = 0; i < pendingPackets.size(); i++) {
+                InboundRtpPacket pendingPacket = pendingPackets.get(i);
+                if (pendingPacket == null || !canRelaySourceRtpPacket(pendingPacket)) {
+                    continue;
+                }
+                if (isStarted(trackId)) {
+                    if (startupIndex >= 0
+                            && shouldRelayPendingStartupPacket(i, pendingPacket, startupIndex)) {
+                        relaySourceRtpPacket(pendingPacket);
+                    } else if (startupIndex < 0) {
+                        relaySourceRtpPacket(pendingPacket);
+                    }
                 }
             }
         }
@@ -509,7 +527,7 @@ public final class WebRtcPlaybackPeerSession implements WebRtcManagedSession {
                     sessionId, streamKey, trackId);
             return false;
         }
-        if (!h264RtpKeyFrameDetector.isKeyFrame(frame.payload(), header)) {
+        if (!isSourceStartupKeyFrame(frame.payload(), header)) {
             logDropOnce(trackId, "wait-source-keyframe",
                     "WebRTC direct RTP relay waiting startup keyframe session={} stream={} track={}",
                     sessionId, streamKey, trackId);
@@ -517,6 +535,74 @@ public final class WebRtcPlaybackPeerSession implements WebRtcManagedSession {
         }
         startedTracksByTrackId.put(trackId, Boolean.TRUE);
         return true;
+    }
+
+    private int findStartupPacketIndex(List<InboundRtpPacket> pendingPackets) {
+        if (pendingPackets == null || pendingPackets.isEmpty()) {
+            return -1;
+        }
+        for (int i = 0; i < pendingPackets.size(); i++) {
+            InboundMediaFrame frame = pendingPackets.get(i) == null ? null : pendingPackets.get(i).frame();
+            if (frame == null) {
+                continue;
+            }
+            RtpParseResult parseResult = rtpPacketParser.parse(frame.payload());
+            RtpPacketHeader header = parseResult == null ? null : parseResult.rtpHeader();
+            if (header != null && isSourceStartupKeyFrame(frame.payload(), header)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private boolean shouldRelayPendingStartupPacket(int packetIndex, InboundRtpPacket packet, int startupIndex) {
+        if (packetIndex >= startupIndex) {
+            return true;
+        }
+        return isSourceParameterSetPacket(packet);
+    }
+
+    private boolean isSourceStartupKeyFrame(byte[] packet, RtpPacketHeader header) {
+        return h264RtpKeyFrameDetector.isKeyFrame(packet, header);
+    }
+
+    private boolean isSourceParameterSetPacket(InboundRtpPacket packet) {
+        InboundMediaFrame frame = packet == null ? null : packet.frame();
+        if (frame == null || frame.payload() == null) {
+            return false;
+        }
+        RtpParseResult parseResult = rtpPacketParser.parse(frame.payload());
+        RtpPacketHeader header = parseResult == null ? null : parseResult.rtpHeader();
+        if (header == null || header.payloadLength() <= 0) {
+            return false;
+        }
+        int payloadOffset = header.payloadOffset();
+        byte[] rawPacket = frame.payload();
+        if (payloadOffset >= rawPacket.length) {
+            return false;
+        }
+        int nalType = rawPacket[payloadOffset] & 0x1F;
+        if (nalType == 7 || nalType == 8) {
+            return true;
+        }
+        if (nalType != 24) {
+            return false;
+        }
+        int cursor = payloadOffset + 1;
+        int limit = rawPacket.length;
+        while (cursor + 2 <= limit) {
+            int nalLength = ((rawPacket[cursor] & 0xFF) << 8) | (rawPacket[cursor + 1] & 0xFF);
+            cursor += 2;
+            if (nalLength <= 0 || cursor + nalLength > limit) {
+                return false;
+            }
+            int stapNalType = rawPacket[cursor] & 0x1F;
+            if (stapNalType == 7 || stapNalType == 8) {
+                return true;
+            }
+            cursor += nalLength;
+        }
+        return false;
     }
 
     private void logFirstSrtpPacket(InboundMediaFrame frame, int payloadType, int clockRate, InetSocketAddress target, int bytes, boolean marker) {
