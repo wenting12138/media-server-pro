@@ -96,6 +96,33 @@ class WebRtcPublishHandlerTest {
     }
 
     @Test
+    void shouldAcceptPublishOfferWithInlineIceCandidate() throws Exception {
+        StreamRegistry registry = new StreamRegistry();
+        WebRtcPublishSessionManager sessionManager = new WebRtcPublishSessionManager();
+        EmbeddedChannel channel = new EmbeddedChannel(
+                new HttpRouterHandler(new WebRtcPublishHandler(
+                        registry,
+                        sessionManager,
+                        new InetSocketAddress("192.168.3.52", 18081),
+                        new NoopDatagramIoSender()
+                ))
+        );
+
+        channel.writeInbound(request("{\"app\":\"live\",\"stream\":\"cam01\",\"sdp\":\""
+                + escapeJson(publishOfferWithH264AndCandidate()) + "\"}"));
+
+        FullHttpResponse response = channel.readOutbound();
+        assertEquals(200, response.status().code());
+        JsonNode root = objectMapper.readTree(response.content().toString(CharsetUtil.UTF_8));
+        assertEquals(0, root.get("code").asInt());
+        assertEquals(1, sessionManager.count());
+        assertNotNull(registry.findPublishedStream(new StreamKey(StreamProtocol.WEBRTC, "live", "cam01")));
+        response.release();
+        channel.finishAndReleaseAll();
+        sessionManager.close();
+    }
+
+    @Test
     void shouldRejectDuplicateStreamPath() {
         StreamRegistry registry = new StreamRegistry();
         registry.registerPublishedStream(
@@ -202,6 +229,11 @@ class WebRtcPublishHandlerTest {
                 + "a=sendonly\r\n"
                 + "a=rtcp-mux\r\n"
                 + "a=rtpmap:96 H264/90000\r\n";
+    }
+
+    private static String publishOfferWithH264AndCandidate() {
+        return publishOfferWithH264()
+                + "a=candidate:1 1 UDP 2130706431 127.0.0.1 50000 typ host\r\n";
     }
 
     private static String publishOfferWithVp8Only() {

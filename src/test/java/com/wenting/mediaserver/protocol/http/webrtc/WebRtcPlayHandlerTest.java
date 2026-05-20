@@ -125,6 +125,36 @@ class WebRtcPlayHandlerTest {
     }
 
     @Test
+    void shouldAcceptOfferWithInlineIceCandidate() throws Exception {
+        StreamRegistry registry = new StreamRegistry();
+        StreamKey streamKey = new StreamKey(StreamProtocol.RTMP, "live", "cam01");
+        DefaultPublishedStream publishedStream = new DefaultPublishedStream(streamKey);
+        registry.registerPublishedStream(streamKey, publishedStream);
+        WebRtcPlaybackSessionManager sessionManager = new WebRtcPlaybackSessionManager();
+        EmbeddedChannel channel = new EmbeddedChannel(
+                new HttpRouterHandler(new WebRtcPlayHandler(
+                        registry,
+                        sessionManager,
+                        new InetSocketAddress("192.168.3.52", 18081),
+                        new NoopDatagramIoSender()
+                ))
+        );
+
+        channel.writeInbound(request("{\"app\":\"live\",\"stream\":\"cam01\",\"sdp\":\""
+                + escapeJson(offerWithH264AndCandidate()) + "\"}"));
+
+        FullHttpResponse response = channel.readOutbound();
+        assertEquals(200, response.status().code());
+        JsonNode root = objectMapper.readTree(response.content().toString(CharsetUtil.UTF_8));
+        assertEquals(0, root.get("code").asInt());
+        assertEquals(1, sessionManager.count());
+        assertEquals(1, publishedStream.subscriberCount());
+        response.release();
+        channel.finishAndReleaseAll();
+        sessionManager.close();
+    }
+
+    @Test
     void shouldRemoveSubscriberWhenPeerConnectionCloses() throws Exception {
         StreamRegistry registry = new StreamRegistry();
         StreamKey streamKey = new StreamKey(StreamProtocol.RTMP, "live", "cam01");
@@ -204,6 +234,11 @@ class WebRtcPlayHandlerTest {
                 + "a=recvonly\r\n"
                 + "a=rtcp-mux\r\n"
                 + "a=rtpmap:96 H264/90000\r\n";
+    }
+
+    private static String offerWithH264AndCandidate() {
+        return offerWithH264()
+                + "a=candidate:1 1 UDP 2130706431 127.0.0.1 50000 typ host\r\n";
     }
 
     private static String offerWithAudioAndH264() {

@@ -99,6 +99,8 @@ public class RTCPeerConnection implements AutoCloseable {
     private volatile boolean srtpActive = false;
     private volatile InetSocketAddress remoteAddress;
     private volatile SrtpCryptoContext inboundSrtcpContext;
+    private final List<RTCIceCandidate> pendingRemoteIceCandidates = new ArrayList<>();
+    private final Set<String> remoteCandidateSignatures = new HashSet<>();
 
     // ---- ICE credentials ----
     private String localUfrag;
@@ -272,6 +274,7 @@ public class RTCPeerConnection implements AutoCloseable {
 
             this.remoteDescriptionSet = true;
             this.remoteFingerprint = parsed.getFingerprint();
+            importRemoteCandidatesFromSdp(parsed);
 
             // Parse media sections from remote SDP
             boolean isOffer = "offer".equals(desc.getType());
@@ -365,20 +368,20 @@ public class RTCPeerConnection implements AutoCloseable {
      */
     public synchronized void addIceCandidate(RTCIceCandidate candidate)
             throws RTCPeerConnectionException {
+        if (candidate == null || candidate.getCandidate() == null
+            || candidate.getCandidate().trim().isEmpty()) {
+            return;
+        }
+        String signature = candidate.getCandidate().trim();
+        if (!remoteCandidateSignatures.add(signature)) {
+            return;
+        }
         if (iceAgent == null) {
-            throw new RTCPeerConnectionException("ICE agent not initialized (call createOffer/createAnswer first)");
+            pendingRemoteIceCandidates.add(candidate);
+            return;
         }
-
-        IceCandidate parsed = WebrtcSdpUtil.parseCandidate(candidate.getCandidate(), remoteUfrag);
-        if (parsed != null) {
-            iceAgent.addRemoteCandidate(parsed);
-        }
-
-        // Start ICE checks once we have remote candidates AND gathering is complete
-        if (!iceStarted && remoteDescriptionSet && iceAgent.isGatheringComplete()) {
-            iceStarted = true;
-            iceAgent.startConnectivityChecks();
-        }
+        addRemoteCandidateToIceAgent(candidate);
+        maybeStartIceConnectivityChecks();
     }
 
     // ========================================================================
@@ -650,7 +653,7 @@ public class RTCPeerConnection implements AutoCloseable {
     // Internal — ICE Agent creation
     // ========================================================================
 
-    private synchronized IceAgent createIceAgent(IceAgent.Role role) {
+    private synchronized IceAgent createIceAgent(IceAgent.Role role) throws RTCPeerConnectionException {
         if (iceAgent != null) return iceAgent;
 
         this.iceAgent = new IceAgent(transport, role);
@@ -705,6 +708,8 @@ public class RTCPeerConnection implements AutoCloseable {
 
         // Start gathering (host already present, srflx begins now)
         iceAgent.startGathering();
+        flushPendingRemoteCandidatesToIceAgent();
+        maybeStartIceConnectivityChecks();
 
         return iceAgent;
     }
@@ -1160,6 +1165,66 @@ public class RTCPeerConnection implements AutoCloseable {
             }
         }
         return null;
+    }
+
+    private synchronized void importRemoteCandidatesFromSdp(SdpDescription parsed)
+            throws RTCPeerConnectionException {
+        if (parsed == null) {
+            return;
+        }
+        for (SdpDescription.Attribute attr : parsed.getSessionAttributes()) {
+            addSdpAttributeCandidate(attr);
+        }
+        for (MediaDescription mediaDescription : parsed.getMediaDescriptions()) {
+            if (mediaDescription == null || mediaDescription.attributes == null) {
+                continue;
+            }
+            for (SdpDescription.Attribute attr : mediaDescription.attributes) {
+                addSdpAttributeCandidate(attr);
+            }
+        }
+        maybeStartIceConnectivityChecks();
+    }
+
+    private void addSdpAttributeCandidate(SdpDescription.Attribute attr)
+            throws RTCPeerConnectionException {
+        if (attr == null || !"candidate".equals(attr.key) || attr.value == null) {
+            return;
+        }
+        addIceCandidate(new RTCIceCandidate(attr.value, null, 0));
+    }
+
+    private void addRemoteCandidateToIceAgent(RTCIceCandidate candidate)
+            throws RTCPeerConnectionException {
+        if (iceAgent == null) {
+            throw new RTCPeerConnectionException("ICE agent not initialized (call createOffer/createAnswer first)");
+        }
+        IceCandidate parsed = WebrtcSdpUtil.parseCandidate(candidate.getCandidate(), remoteUfrag);
+        if (parsed != null) {
+            iceAgent.addRemoteCandidate(parsed);
+        }
+    }
+
+    private void flushPendingRemoteCandidatesToIceAgent() throws RTCPeerConnectionException {
+        if (iceAgent == null || pendingRemoteIceCandidates.isEmpty()) {
+            return;
+        }
+        List<RTCIceCandidate> queued = new ArrayList<>(pendingRemoteIceCandidates);
+        pendingRemoteIceCandidates.clear();
+        for (RTCIceCandidate candidate : queued) {
+            addRemoteCandidateToIceAgent(candidate);
+        }
+    }
+
+    private void maybeStartIceConnectivityChecks() {
+        if (iceStarted || !remoteDescriptionSet || iceAgent == null) {
+            return;
+        }
+        if (iceAgent.getRemoteCandidates().isEmpty() || !iceAgent.isGatheringComplete()) {
+            return;
+        }
+        iceStarted = true;
+        iceAgent.startConnectivityChecks();
     }
 
     private void dispatchRtcpFeedback(RtcpPacket packet) {

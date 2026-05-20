@@ -283,4 +283,70 @@ public class RTCPeerConnectionTest {
             pc2.close();
         }
     }
+
+    @Test(timeout = 60000)
+    public void testFullLoopbackDataChannelWithCandidatesImportedFromSdp() throws Exception {
+        RTCPeerConnection pc1 = new RTCPeerConnection();
+        RTCPeerConnection pc2 = new RTCPeerConnection();
+
+        try {
+            CountDownLatch pc1Ice = new CountDownLatch(1);
+            CountDownLatch pc2Ice = new CountDownLatch(1);
+            CountDownLatch pc1Ready = new CountDownLatch(1);
+            CountDownLatch pc2Ready = new CountDownLatch(1);
+            CountDownLatch dcReceived = new CountDownLatch(1);
+            CountDownLatch msgReceived = new CountDownLatch(1);
+            AtomicReference<String> receivedMsg = new AtomicReference<>();
+
+            pc1.onIceConnectionStateChange = s -> {
+                if (s == RTCPeerConnection.IceConnectionState.CONNECTED
+                    || s == RTCPeerConnection.IceConnectionState.COMPLETED) {
+                    pc1Ice.countDown();
+                }
+            };
+            pc2.onIceConnectionStateChange = s -> {
+                if (s == RTCPeerConnection.IceConnectionState.CONNECTED
+                    || s == RTCPeerConnection.IceConnectionState.COMPLETED) {
+                    pc2Ice.countDown();
+                }
+            };
+            pc1.onConnectionStateChange = s -> {
+                if (s == RTCPeerConnection.ConnectionState.CONNECTED) pc1Ready.countDown();
+            };
+            pc2.onConnectionStateChange = s -> {
+                if (s == RTCPeerConnection.ConnectionState.CONNECTED) pc2Ready.countDown();
+            };
+
+            RTCSessionDescription offer = pc1.createOffer().get();
+            pc1.setLocalDescription(offer);
+            pc2.setRemoteDescription(offer);
+
+            RTCSessionDescription answer = pc2.createAnswer().get();
+            pc2.setLocalDescription(answer);
+            pc1.setRemoteDescription(answer);
+
+            assertTrue("PC1 ICE timeout", pc1Ice.await(10, TimeUnit.SECONDS));
+            assertTrue("PC2 ICE timeout", pc2Ice.await(10, TimeUnit.SECONDS));
+            assertTrue("PC1 full connection timeout", pc1Ready.await(20, TimeUnit.SECONDS));
+            assertTrue("PC2 full connection timeout", pc2Ready.await(20, TimeUnit.SECONDS));
+
+            pc2.onDataChannel = dc -> {
+                dcReceived.countDown();
+                dc.setMessageHandler((data, isBinary) -> {
+                    receivedMsg.set(new String(data, StandardCharsets.UTF_8));
+                    msgReceived.countDown();
+                });
+            };
+
+            DataChannel dc = pc1.createDataChannel("sdp-import");
+            assertTrue("PC2 should receive DataChannel", dcReceived.await(5, TimeUnit.SECONDS));
+
+            dc.send("Hello SDP ICE!");
+            assertTrue("PC2 should receive message", msgReceived.await(5, TimeUnit.SECONDS));
+            assertEquals("Hello SDP ICE!", receivedMsg.get());
+        } finally {
+            pc1.close();
+            pc2.close();
+        }
+    }
 }
