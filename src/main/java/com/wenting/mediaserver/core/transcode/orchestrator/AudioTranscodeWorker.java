@@ -1,5 +1,6 @@
 package com.wenting.mediaserver.core.transcode.orchestrator;
 
+import com.wenting.mediaserver.core.enums.StreamProtocol;
 import com.wenting.mediaserver.core.model.StreamKey;
 import com.wenting.mediaserver.core.publish.InboundMediaFrame;
 import com.wenting.mediaserver.core.publish.InboundRtpPacket;
@@ -23,6 +24,7 @@ import java.util.concurrent.atomic.AtomicLong;
 final class AudioTranscodeWorker implements Runnable {
 
     private static final Logger log = LoggerFactory.getLogger(AudioTranscodeWorker.class);
+    private static final long REALTIME_STATS_LOG_INTERVAL_MS = 5000L;
     private static final long STALE_AUDIO_FRAME_DROP_THRESHOLD_MS = 200L;
 
     private final StreamKey sourceKey;
@@ -36,6 +38,8 @@ final class AudioTranscodeWorker implements Runnable {
     private final AtomicBoolean firstDerivedOutputLogged = new AtomicBoolean(false);
     private final AtomicLong backlogTrimCount = new AtomicLong(0);
     private final AtomicLong staleDropCount = new AtomicLong(0);
+    private final AtomicLong queuePeakSinceLastReport = new AtomicLong(0);
+    private final AtomicBoolean transcoderResetRequested = new AtomicBoolean(false);
     private final Thread thread;
     private final AtomicBoolean playbackActive = new AtomicBoolean(false);
     private volatile TransformDecision transformDecision = TransformDecision.PENDING;
@@ -43,6 +47,9 @@ final class AudioTranscodeWorker implements Runnable {
     private volatile CanonicalAudioFrame latestStartupConfigFrame;
     private volatile CanonicalAudioFrame latestStartupMediaFrame;
     private volatile long latestObservedMediaTimestampMs = Long.MIN_VALUE;
+    private volatile long lastRealtimeStatsLogAtMs = System.currentTimeMillis();
+    private volatile long lastReportedBacklogTrimCount = 0L;
+    private volatile long lastReportedStaleDropCount = 0L;
 
     private AudioTranscodeWorker(
             StreamKey sourceKey,
@@ -94,9 +101,9 @@ final class AudioTranscodeWorker implements Runnable {
         if (!running.compareAndSet(true, false)) {
             return;
         }
+        transcoderResetRequested.set(true);
         thread.interrupt();
         canonicalizer.close();
-        closeTranscoder();
         queue.clear();
         if (publisher != null) {
             publisher.removeStream(derivedKey);
@@ -140,10 +147,13 @@ final class AudioTranscodeWorker implements Runnable {
         }
         if (!active) {
             queue.clear();
-            closeTranscoder();
+            requestTranscoderReset();
+            resetRealtimeStatsWindow();
+            thread.interrupt();
             log.info("Suspended audio transform worker source={} derived={}", sourceKey, derivedKey);
             return;
         }
+        resetRealtimeStatsWindow();
         seedStartupCache();
         log.info("Activated audio transform worker source={} derived={}", sourceKey, derivedKey);
     }
@@ -182,6 +192,7 @@ final class AudioTranscodeWorker implements Runnable {
             seeded++;
         }
         if (seeded > 0) {
+            observeQueueDepth();
             log.info("Seeded audio startup cache source={} derived={} seededFrames={} hasConfig={} hasMedia={}",
                     sourceKey, derivedKey, seeded, configFrame != null, mediaFrame != null);
         }
@@ -193,7 +204,10 @@ final class AudioTranscodeWorker implements Runnable {
         }
         if (!queue.offer(canonicalFrame)) {
             trimBacklogForRealtime(canonicalFrame);
+            observeQueueDepth();
+            return;
         }
+        observeQueueDepth();
     }
 
     private void trimBacklogForRealtime(CanonicalAudioFrame incomingFrame) {
@@ -225,51 +239,68 @@ final class AudioTranscodeWorker implements Runnable {
 
     @Override
     public void run() {
-        while (running.get()) {
-            try {
-                CanonicalAudioFrame frame = queue.poll(1000L, TimeUnit.MILLISECONDS);
-                if (frame == null) {
-                    continue;
+        try {
+            while (running.get()) {
+                applyPendingTranscoderReset();
+                try {
+                    CanonicalAudioFrame frame = queue.poll(1000L, TimeUnit.MILLISECONDS);
+                    maybeLogRealtimeStats();
+                    applyPendingTranscoderReset();
+                    if (frame == null) {
+                        continue;
+                    }
+                    if (!playbackActive.get()) {
+                        continue;
+                    }
+                    if (shouldDropStaleFrame(frame)) {
+                        continue;
+                    }
+                    TransformDecision nextDecision = decisionPolicy == null
+                            ? TransformDecision.TRANSCODE
+                            : decisionPolicy.decide(sourceKey, frame, transformDecision);
+                    if (nextDecision != transformDecision) {
+                        log.info(
+                                "Audio transform decision source={} derived={} decision={} codec={} configFrame={}",
+                                sourceKey,
+                                derivedKey,
+                                nextDecision,
+                                frame.codecType(),
+                                frame.configFrame()
+                        );
+                        transformDecision = nextDecision;
+                    }
+                    if (transformDecision == TransformDecision.PENDING) {
+                        continue;
+                    }
+                    if (transformDecision == TransformDecision.PASSTHROUGH) {
+                        if (playbackActive.get()) {
+                            publisher.publish(derivedKey, copyAsDerivedFrame(frame));
+                        }
+                        continue;
+                    }
+                    AudioFrameTranscoder activeTranscoder = ensureTranscoder();
+                    if (activeTranscoder == null) {
+                        continue;
+                    }
+                    List<InboundMediaFrame> outputs = activeTranscoder.transcode(frame, derivedKey);
+                    if (!playbackActive.get()) {
+                        continue;
+                    }
+                    for (InboundMediaFrame output : outputs) {
+                        logFirstDerivedOutput(frame, output);
+                        publisher.publish(derivedKey, output);
+                    }
+                } catch (InterruptedException e) {
+                    if (!running.get()) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                } catch (Exception e) {
+                    log.warn("Audio transform failed source={} derived={}", sourceKey, derivedKey, e);
                 }
-                if (shouldDropStaleFrame(frame)) {
-                    continue;
-                }
-                TransformDecision nextDecision = decisionPolicy == null
-                        ? TransformDecision.TRANSCODE
-                        : decisionPolicy.decide(sourceKey, frame, transformDecision);
-                if (nextDecision != transformDecision) {
-                    log.info(
-                            "Audio transform decision source={} derived={} decision={} codec={} configFrame={}",
-                            sourceKey,
-                            derivedKey,
-                            nextDecision,
-                            frame.codecType(),
-                            frame.configFrame()
-                    );
-                    transformDecision = nextDecision;
-                }
-                if (transformDecision == TransformDecision.PENDING) {
-                    continue;
-                }
-                if (transformDecision == TransformDecision.PASSTHROUGH) {
-                    publisher.publish(derivedKey, copyAsDerivedFrame(frame));
-                    continue;
-                }
-                AudioFrameTranscoder activeTranscoder = ensureTranscoder();
-                if (activeTranscoder == null) {
-                    continue;
-                }
-                List<InboundMediaFrame> outputs = activeTranscoder.transcode(frame, derivedKey);
-                for (InboundMediaFrame output : outputs) {
-                    logFirstDerivedOutput(frame, output);
-                    publisher.publish(derivedKey, output);
-                }
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                break;
-            } catch (Exception e) {
-                log.warn("Audio transform failed source={} derived={}", sourceKey, derivedKey, e);
             }
+        } finally {
+            closeTranscoder();
         }
     }
 
@@ -292,6 +323,64 @@ final class AudioTranscodeWorker implements Runnable {
                     sourceKey, derivedKey, lagMs, count, frame.configFrame());
         }
         return true;
+    }
+
+    private void observeQueueDepth() {
+        long depth = queue.size();
+        long observed;
+        do {
+            observed = queuePeakSinceLastReport.get();
+            if (depth <= observed) {
+                return;
+            }
+        } while (!queuePeakSinceLastReport.compareAndSet(observed, depth));
+    }
+
+    private void maybeLogRealtimeStats() {
+        if (!usesWebRtcRealtimeStats() || !playbackActive.get()) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (now - lastRealtimeStatsLogAtMs < REALTIME_STATS_LOG_INTERVAL_MS) {
+            return;
+        }
+        long trimCount = backlogTrimCount.get();
+        long staleCount = staleDropCount.get();
+        long trimDelta = trimCount - lastReportedBacklogTrimCount;
+        long staleDelta = staleCount - lastReportedStaleDropCount;
+        int queueCurrent = queue.size();
+        long queuePeak = Math.max(queueCurrent, queuePeakSinceLastReport.getAndSet(queueCurrent));
+        log.info(
+                "WebRTC audio transform realtime stats source={} derived={} decision={} queueCurrent={} queuePeak={} staleDrops={} trimCount={}",
+                sourceKey,
+                derivedKey,
+                transformDecision,
+                queueCurrent,
+                queuePeak,
+                staleDelta,
+                trimDelta
+        );
+        lastRealtimeStatsLogAtMs = now;
+        lastReportedBacklogTrimCount = trimCount;
+        lastReportedStaleDropCount = staleCount;
+    }
+
+    private void requestTranscoderReset() {
+        transcoderResetRequested.set(true);
+    }
+
+    private void applyPendingTranscoderReset() {
+        if (!transcoderResetRequested.compareAndSet(true, false)) {
+            return;
+        }
+        closeTranscoder();
+    }
+
+    private void resetRealtimeStatsWindow() {
+        queuePeakSinceLastReport.set(queue.size());
+        lastRealtimeStatsLogAtMs = System.currentTimeMillis();
+        lastReportedBacklogTrimCount = backlogTrimCount.get();
+        lastReportedStaleDropCount = staleDropCount.get();
     }
 
     private Long mediaTimestampMillis(CanonicalAudioFrame frame) {
@@ -366,5 +455,9 @@ final class AudioTranscodeWorker implements Runnable {
                 transcoder = null;
             }
         }
+    }
+
+    private boolean usesWebRtcRealtimeStats() {
+        return sourceKey != null && sourceKey.protocol() == StreamProtocol.WEBRTC;
     }
 }

@@ -24,6 +24,7 @@ import java.util.concurrent.atomic.AtomicLong;
 final class TranscodeWorker implements Runnable {
 
     private static final Logger log = LoggerFactory.getLogger(TranscodeWorker.class);
+    private static final long REALTIME_STATS_LOG_INTERVAL_MS = 5000L;
     private static final long STALE_VIDEO_FRAME_DROP_THRESHOLD_MS = 1500L;
     private static final long STALE_WEBRTC_VIDEO_FRAME_DROP_THRESHOLD_MS = 500L;
 
@@ -37,6 +38,8 @@ final class TranscodeWorker implements Runnable {
     private final AtomicBoolean running = new AtomicBoolean(true);
     private final AtomicLong backlogTrimCount = new AtomicLong(0);
     private final AtomicLong staleDropCount = new AtomicLong(0);
+    private final AtomicLong queuePeakSinceLastReport = new AtomicLong(0);
+    private final AtomicBoolean transcoderResetRequested = new AtomicBoolean(false);
     private final Thread thread;
     private final AtomicBoolean playbackActive = new AtomicBoolean(false);
     private volatile TransformDecision transformDecision = TransformDecision.PENDING;
@@ -45,6 +48,9 @@ final class TranscodeWorker implements Runnable {
     private volatile CanonicalVideoFrame latestStartupConfigFrame;
     private volatile CanonicalVideoFrame latestStartupKeyFrame;
     private volatile long latestObservedMediaTimestampMs = Long.MIN_VALUE;
+    private volatile long lastRealtimeStatsLogAtMs = System.currentTimeMillis();
+    private volatile long lastReportedBacklogTrimCount = 0L;
+    private volatile long lastReportedStaleDropCount = 0L;
 
     private TranscodeWorker(
             StreamKey sourceKey,
@@ -96,9 +102,9 @@ final class TranscodeWorker implements Runnable {
         if (!running.compareAndSet(true, false)) {
             return;
         }
+        transcoderResetRequested.set(true);
         thread.interrupt();
         canonicalizer.close();
-        closeTranscoder();
         queue.clear();
         if (publisher != null) {
             publisher.removeStream(derivedKey);
@@ -122,10 +128,13 @@ final class TranscodeWorker implements Runnable {
         }
         if (!active) {
             queue.clear();
-            closeTranscoder();
+            requestTranscoderReset();
+            resetRealtimeStatsWindow();
+            thread.interrupt();
             log.info("Suspended stream transform worker source={} derived={}", sourceKey, derivedKey);
             return;
         }
+        resetRealtimeStatsWindow();
         seedStartupCache();
         log.info("Activated stream transform worker source={} derived={}", sourceKey, derivedKey);
     }
@@ -166,7 +175,10 @@ final class TranscodeWorker implements Runnable {
         }
         if (!queue.offer(canonicalFrame)) {
             trimBacklogForRealtime(canonicalFrame);
+            observeQueueDepth();
+            return;
         }
+        observeQueueDepth();
     }
 
     private void rememberStartupFrame(CanonicalVideoFrame frame) {
@@ -204,6 +216,7 @@ final class TranscodeWorker implements Runnable {
             seeded++;
         }
         if (seeded > 0) {
+            observeQueueDepth();
             log.info("Seeded video startup cache source={} derived={} seededFrames={} hasConfig={} hasKeyFrame={}",
                     sourceKey, derivedKey, seeded, configFrame != null, keyFrame != null);
         }
@@ -253,54 +266,71 @@ final class TranscodeWorker implements Runnable {
 
     @Override
     public void run() {
-        while (running.get()) {
-            try {
-                CanonicalVideoFrame frame = queue.poll(1000L, TimeUnit.MILLISECONDS);
-                if (frame == null) {
-                    continue;
+        try {
+            while (running.get()) {
+                applyPendingTranscoderReset();
+                try {
+                    CanonicalVideoFrame frame = queue.poll(1000L, TimeUnit.MILLISECONDS);
+                    maybeLogRealtimeStats();
+                    applyPendingTranscoderReset();
+                    if (frame == null) {
+                        continue;
+                    }
+                    if (!playbackActive.get()) {
+                        continue;
+                    }
+                    if (shouldDropStaleFrame(frame)) {
+                        continue;
+                    }
+                    TransformDecision nextDecision = decisionPolicy == null
+                            ? TransformDecision.TRANSCODE
+                            : decisionPolicy.decide(sourceKey, frame, transformDecision);
+                    if (nextDecision != transformDecision) {
+                        log.info(
+                                "Stream transform decision source={} derived={} decision={} profile-level-id={} keyFrame={} configFrame={}",
+                                sourceKey,
+                                derivedKey,
+                                nextDecision,
+                                frame.h264CodecConfig() == null ? null : frame.h264CodecConfig().profileLevelId(),
+                                frame.keyFrame(),
+                                frame.configFrame()
+                        );
+                        transformDecision = nextDecision;
+                    }
+                    if (transformDecision == TransformDecision.PENDING) {
+                        continue;
+                    }
+                    if (transformDecision == TransformDecision.PASSTHROUGH) {
+                        if (playbackActive.get()) {
+                            publisher.publish(derivedKey, copyAsDerivedFrame(frame));
+                        }
+                        continue;
+                    }
+                    VideoFrameTranscoder activeTranscoder = ensureTranscoder();
+                    if (activeTranscoder == null) {
+                        continue;
+                    }
+                    if (keyFrameRequestPending.compareAndSet(true, false)) {
+                        activeTranscoder.requestKeyFrame();
+                    }
+                    List<InboundMediaFrame> outputs = activeTranscoder.transcode(frame, derivedKey);
+                    if (!playbackActive.get()) {
+                        continue;
+                    }
+                    for (InboundMediaFrame output : outputs) {
+                        publisher.publish(derivedKey, output);
+                    }
+                } catch (InterruptedException e) {
+                    if (!running.get()) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                } catch (Exception e) {
+                    log.warn("Stream transform failed source={} derived={}", sourceKey, derivedKey, e);
                 }
-                if (shouldDropStaleFrame(frame)) {
-                    continue;
-                }
-                TransformDecision nextDecision = decisionPolicy == null
-                        ? TransformDecision.TRANSCODE
-                        : decisionPolicy.decide(sourceKey, frame, transformDecision);
-                if (nextDecision != transformDecision) {
-                    log.info(
-                            "Stream transform decision source={} derived={} decision={} profile-level-id={} keyFrame={} configFrame={}",
-                            sourceKey,
-                            derivedKey,
-                            nextDecision,
-                            frame.h264CodecConfig() == null ? null : frame.h264CodecConfig().profileLevelId(),
-                            frame.keyFrame(),
-                            frame.configFrame()
-                    );
-                    transformDecision = nextDecision;
-                }
-                if (transformDecision == TransformDecision.PENDING) {
-                    continue;
-                }
-                if (transformDecision == TransformDecision.PASSTHROUGH) {
-                    publisher.publish(derivedKey, copyAsDerivedFrame(frame));
-                    continue;
-                }
-                VideoFrameTranscoder activeTranscoder = ensureTranscoder();
-                if (activeTranscoder == null) {
-                    continue;
-                }
-                if (keyFrameRequestPending.compareAndSet(true, false)) {
-                    activeTranscoder.requestKeyFrame();
-                }
-                List<InboundMediaFrame> outputs = activeTranscoder.transcode(frame, derivedKey);
-                for (InboundMediaFrame output : outputs) {
-                    publisher.publish(derivedKey, output);
-                }
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                break;
-            } catch (Exception e) {
-                log.warn("Stream transform failed source={} derived={}", sourceKey, derivedKey, e);
             }
+        } finally {
+            closeTranscoder();
         }
     }
 
@@ -326,6 +356,64 @@ final class TranscodeWorker implements Runnable {
                     sourceKey, derivedKey, lagMs, count, frame.keyFrame(), frame.configFrame());
         }
         return true;
+    }
+
+    private void observeQueueDepth() {
+        long depth = queue.size();
+        long observed;
+        do {
+            observed = queuePeakSinceLastReport.get();
+            if (depth <= observed) {
+                return;
+            }
+        } while (!queuePeakSinceLastReport.compareAndSet(observed, depth));
+    }
+
+    private void maybeLogRealtimeStats() {
+        if (!usesAggressiveRealtimeBacklog() || !playbackActive.get()) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (now - lastRealtimeStatsLogAtMs < REALTIME_STATS_LOG_INTERVAL_MS) {
+            return;
+        }
+        long trimCount = backlogTrimCount.get();
+        long staleCount = staleDropCount.get();
+        long trimDelta = trimCount - lastReportedBacklogTrimCount;
+        long staleDelta = staleCount - lastReportedStaleDropCount;
+        int queueCurrent = queue.size();
+        long queuePeak = Math.max(queueCurrent, queuePeakSinceLastReport.getAndSet(queueCurrent));
+        log.info(
+                "WebRTC video transform realtime stats source={} derived={} decision={} queueCurrent={} queuePeak={} staleDrops={} trimCount={}",
+                sourceKey,
+                derivedKey,
+                transformDecision,
+                queueCurrent,
+                queuePeak,
+                staleDelta,
+                trimDelta
+        );
+        lastRealtimeStatsLogAtMs = now;
+        lastReportedBacklogTrimCount = trimCount;
+        lastReportedStaleDropCount = staleCount;
+    }
+
+    private void requestTranscoderReset() {
+        transcoderResetRequested.set(true);
+    }
+
+    private void applyPendingTranscoderReset() {
+        if (!transcoderResetRequested.compareAndSet(true, false)) {
+            return;
+        }
+        closeTranscoder();
+    }
+
+    private void resetRealtimeStatsWindow() {
+        queuePeakSinceLastReport.set(queue.size());
+        lastRealtimeStatsLogAtMs = System.currentTimeMillis();
+        lastReportedBacklogTrimCount = backlogTrimCount.get();
+        lastReportedStaleDropCount = staleDropCount.get();
     }
 
     private Long mediaTimestampMillis(CanonicalVideoFrame frame) {
